@@ -1,12 +1,9 @@
 use std::io::{Cursor, Read, Write};
 use std::net::TcpListener;
-use std::sync::mpsc;
 use std::thread;
 
-use futures_util::SinkExt;
 use nanobot_app::NanobotApp;
 use nanobot_provider::DemoToolCallingProvider;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use super::*;
 
@@ -88,69 +85,6 @@ fn serve_mode_runs_with_finite_iterations() {
     std::fs::create_dir_all(&dir).expect("temp dir should exist");
 
     run_service_mode(Config::default(), dir, 2, 0).expect("serve mode should run");
-}
-
-#[test]
-fn serve_mode_starts_feishu_runtime_and_persists_inbound_session() {
-    let dir = std::env::temp_dir().join(format!("nanobot-cli-serve-live-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("temp dir should exist");
-    let (addr_tx, addr_rx) = mpsc::channel();
-    let server = thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("test runtime");
-        runtime.block_on(async move {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("listener");
-            addr_tx
-                .send(listener.local_addr().expect("local addr"))
-                .expect("send addr");
-            let (stream, _) = listener.accept().await.expect("accept");
-            let mut ws = accept_async(stream).await.expect("accept websocket");
-            ws.send(Message::Text(
-                r#"{"event":{"sender":{"sender_id":{"open_id":"ou_1"}},"message":{"message_id":"om_cli","chat_id":"oc_cli","content":"{\"text\":\"hello from serve\"}"}}}"#
-                    .to_string()
-                    .into(),
-            ))
-            .await
-            .expect("send frame");
-            ws.close(None).await.expect("close");
-        });
-    });
-    let addr = addr_rx.recv().expect("recv addr");
-    let (api_base, provider_server) = spawn_openai_test_server("echo: hello from serve");
-    let config = Config::from_json_str(&format!(
-        r#"{{
-            "providers": {{
-                "openai": {{
-                    "apiKey": "sk-test",
-                    "apiBase": "{api_base}"
-                }}
-            }},
-            "channels": {{
-                "feishu": {{
-                    "enabled": true,
-                    "appId": "cli_a",
-                    "appSecret": "secret_a",
-                    "websocketUrl": "ws://{addr}",
-                    "allowFrom": ["ou_1"]
-                }}
-            }}
-        }}"#
-    ))
-    .expect("config should parse");
-
-    run_service_mode(config, dir.clone(), 20, 10).expect("serve mode should run");
-
-    server.join().expect("server should join");
-    provider_server.join().expect("provider server should join");
-    let session = std::fs::read_to_string(dir.join("sessions").join("feishu_oc_cli.jsonl"))
-        .expect("session file should exist");
-    assert!(session.contains("hello from serve"));
-    assert!(session.contains("echo: hello from serve"));
 }
 
 #[test]

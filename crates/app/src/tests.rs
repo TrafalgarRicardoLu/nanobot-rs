@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use nanobot_config::{Config, FeishuConfig, QQConfig};
+use nanobot_channels::Channel;
+use nanobot_config::Config;
 use nanobot_cron::CronError;
 use nanobot_provider::{
     ChatRequest, DemoToolCallingProvider, LlmProvider, LlmResponse, ProviderError, StaticProvider,
@@ -19,98 +21,142 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn write_bridge(dir: &Path, source: &str) -> PathBuf {
-    let path = dir.join("qq_bridge_stub.py");
-    fs::write(&path, source).expect("bridge source should write");
-    path
-}
-
-fn with_bridge_source<T>(source: &str, test: impl FnOnce() -> T) -> T {
-    let _guard = env_lock().lock().expect("env lock");
-    let dir = temp_dir("bridge");
-    let path = write_bridge(&dir, source);
-    unsafe {
-        std::env::set_var("NANOBOT_QQ_BRIDGE_SOURCE", &path);
-    }
-    let result = test();
-    unsafe {
-        std::env::remove_var("NANOBOT_QQ_BRIDGE_SOURCE");
-    }
-    result
-}
-
 #[test]
-fn registers_only_enabled_feishu_and_qq_channels() {
-    let mut config = Config::default();
-    config.channels.feishu = FeishuConfig {
-        enabled: true,
-        allow_from: vec!["ou_1".to_string()],
-        ..FeishuConfig::default()
-    };
-    config.channels.qq = QQConfig {
-        enabled: true,
-        allow_from: vec!["user-1".to_string()],
-        ..QQConfig::default()
-    };
-
+fn app_builds_with_no_channels_configured() {
     let app = NanobotApp::new(
-        config,
-        Box::new(StaticProvider::default()),
-        temp_dir("channels"),
-    )
-    .expect("app should build");
-
-    assert_eq!(app.enabled_channel_names(), vec!["feishu", "qq"]);
-}
-
-#[test]
-fn handles_cli_messages_and_persists_session() {
-    let dir = temp_dir("session");
-    let mut app = NanobotApp::new(
         Config::default(),
-        Box::new(StaticProvider::new("offline/test", "assistant")),
-        &dir,
+        Box::new(StaticProvider::default()),
+        temp_dir("no-channels"),
     )
     .expect("app should build");
 
-    let response = app
-        .handle_cli_message("cli:local", "hello")
-        .expect("message should be handled");
-
-    assert_eq!(response.as_deref(), Some("assistant: hello"));
-    assert!(dir.join("sessions").join("cli_local.jsonl").exists());
+    assert!(app.enabled_channel_names().is_empty());
 }
 
 #[test]
-fn status_includes_model_and_enabled_channels() {
-    let mut config = Config::default();
-    config.channels.feishu = FeishuConfig {
-        enabled: true,
-        allow_from: vec!["ou_1".to_string()],
-        ..FeishuConfig::default()
-    };
-
+fn enabled_channel_names_is_empty_by_default() {
     let app = NanobotApp::new(
-        config,
+        Config::default(),
+        Box::new(StaticProvider::default()),
+        temp_dir("enabled-channel-names"),
+    )
+    .expect("app should build");
+
+    assert_eq!(app.enabled_channel_names(), Vec::<&'static str>::new());
+}
+
+#[test]
+fn status_summary_reports_no_channels_by_default() {
+    let app = NanobotApp::new(
+        Config::default(),
         Box::new(StaticProvider::new("offline/test", "assistant")),
         temp_dir("status"),
     )
     .expect("app should build");
 
     let status = app.status_summary();
-    assert!(
-        status.contains("feishu"),
-        "stub should fail until status summary exists"
-    );
-    assert!(
-        status.contains("offline/test"),
-        "stub should fail until provider model is exposed"
-    );
+    assert!(status.contains("channels=none"));
+    assert!(status.contains("offline/test"));
+}
+
+#[test]
+fn start_channel_runtimes_returns_empty_when_no_channels_registered() {
+    let app = NanobotApp::new(
+        Config::default(),
+        Box::new(StaticProvider::default()),
+        temp_dir("channel-runtimes"),
+    )
+    .expect("app should build");
+
+    let handles = app
+        .start_channel_runtimes()
+        .expect("starting runtimes should succeed");
+
+    assert!(handles.is_empty());
+}
+
+#[test]
+fn dispatch_outbound_uses_registered_generic_channel_from_config() {
+    let dir = temp_dir("registered-generic-channel");
+    let deliveries = Arc::new(Mutex::new(Vec::new()));
+    let config = Config::from_json_str(
+        r#"{
+            "channels": [
+                {
+                    "kind": "generic",
+                    "enabled": true
+                }
+            ]
+        }"#,
+    )
+    .expect("config should parse");
+    let mut app = NanobotApp::new_with_channels(
+        config,
+        Box::new(MessageToolProvider),
+        &dir,
+        vec![Box::new(FakeChannel::new("generic", deliveries.clone()))],
+    )
+    .expect("app should build");
+
+    let _ = app
+        .handle_cli_message("generic:user-9", "queue a reply")
+        .expect("message should be handled");
+    let dispatches = app
+        .dispatch_outbound_once()
+        .expect("dispatcher should succeed");
+
+    assert_eq!(app.enabled_channel_names(), vec!["generic"]);
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].delivery, "sent");
+    let sent = deliveries.lock().expect("deliveries lock");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].channel, "generic");
+    assert_eq!(sent[0].chat_id, "user-9");
+    assert_eq!(sent[0].content, "queued reply");
+}
+
+#[test]
+fn from_config_with_channels_uses_registered_generic_channel_from_config() {
+    let dir = temp_dir("from-config-registered-generic-channel");
+    let deliveries = Arc::new(Mutex::new(Vec::new()));
+    let config = Config::from_json_str(
+        r#"{
+            "channels": [
+                {
+                    "kind": "generic",
+                    "enabled": true
+                }
+            ]
+        }"#,
+    )
+    .expect("config should parse");
+    let mut app = NanobotApp::from_config_with_channels(
+        config,
+        &dir,
+        vec![Box::new(FakeChannel::new("generic", deliveries.clone()))],
+    )
+    .expect("app should build");
+    app.bus
+        .publish_outbound(nanobot_bus::OutboundMessage {
+            channel: "generic".to_string(),
+            chat_id: "user-9".to_string(),
+            content: "queued reply".to_string(),
+            metadata: HashMap::new(),
+            reply_to: None,
+        })
+        .expect("outbound should publish");
+    let dispatches = app
+        .dispatch_outbound_once()
+        .expect("dispatcher should succeed");
+
+    assert_eq!(app.enabled_channel_names(), vec!["generic"]);
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].delivery, "sent");
+    let sent = deliveries.lock().expect("deliveries lock");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].channel, "generic");
+    assert_eq!(sent[0].chat_id, "user-9");
+    assert_eq!(sent[0].content, "queued reply");
 }
 
 #[test]
@@ -138,18 +184,36 @@ fn from_config_uses_agent_default_provider_model() {
 }
 
 #[test]
+fn handles_cli_messages_and_persists_session() {
+    let dir = temp_dir("session");
+    let mut app = NanobotApp::new(
+        Config::default(),
+        Box::new(StaticProvider::new("offline/test", "assistant")),
+        &dir,
+    )
+    .expect("app should build");
+
+    let response = app
+        .handle_cli_message("cli:local", "hello")
+        .expect("message should be handled");
+
+    assert_eq!(response.as_deref(), Some("assistant: hello"));
+    assert!(dir.join("sessions").join("cli_local.jsonl").exists());
+}
+
+#[test]
 fn cli_message_run_publishes_outbound_messages_from_tools() {
     let dir = temp_dir("outbound");
     let mut app = NanobotApp::new(Config::default(), Box::new(MessageToolProvider), &dir)
         .expect("app should build");
 
     let _ = app
-        .handle_cli_message("qq:user-9", "queue a reply")
+        .handle_cli_message("generic:user-9", "queue a reply")
         .expect("message should be handled");
 
     let published = app.take_outbound_messages();
     assert_eq!(published.len(), 1);
-    assert_eq!(published[0].channel, "qq");
+    assert_eq!(published[0].channel, "generic");
     assert_eq!(published[0].chat_id, "user-9");
     assert_eq!(published[0].content, "queued reply");
 }
@@ -185,140 +249,35 @@ fn app_run_triggers_memory_consolidation_after_threshold() {
             .expect("message should be handled");
     }
 
-    assert!(
-        dir.join("memories")
-            .join("cli_local")
-            .join("MEMORY.md")
-            .exists()
-    );
-    assert!(
-        dir.join("memories")
-            .join("cli_local")
-            .join("HISTORY.md")
-            .exists()
-    );
+    assert!(dir
+        .join("memories")
+        .join("cli_local")
+        .join("MEMORY.md")
+        .exists());
+    assert!(dir
+        .join("memories")
+        .join("cli_local")
+        .join("HISTORY.md")
+        .exists());
 }
 
 #[test]
-fn dispatcher_skeleton_drains_outbound_queue_into_dispatch_records() {
+fn dispatcher_skips_unregistered_channels_as_unsupported() {
     let dir = temp_dir("dispatch");
     let mut app = NanobotApp::new(Config::default(), Box::new(MessageToolProvider), &dir)
         .expect("app should build");
 
     let _ = app
-        .handle_cli_message("qq:user-9", "queue a reply")
+        .handle_cli_message("generic:user-9", "queue a reply")
         .expect("message should be handled");
 
     let dispatches = app
         .dispatch_outbound_once()
         .expect("dispatcher should succeed");
     assert_eq!(dispatches.len(), 1);
-    assert_eq!(dispatches[0].channel, "qq");
+    assert_eq!(dispatches[0].channel, "generic");
     assert_eq!(dispatches[0].rendered, "queued reply");
-    assert!(dispatches[0].delivery.starts_with("skipped:"));
-}
-
-#[test]
-fn dispatcher_sends_qq_messages_via_python_bridge_once_runtime_is_started() {
-    with_bridge_source(
-        r#"
-import json
-import os
-import threading
-
-class QQBotBridge:
-    def __init__(self, app_id, secret):
-        self._stop = threading.Event()
-
-    def start(self, inbound_sink):
-        self._stop.wait()
-
-    def stop(self):
-        self._stop.set()
-
-    def send(self, chat_id, content, metadata):
-        with open(os.environ["NANOBOT_QQ_SEND_CAPTURE"], "w", encoding="utf-8") as fh:
-            json.dump(
-                {"chat_id": chat_id, "content": content, "metadata": metadata},
-                fh,
-                sort_keys=True,
-            )
-"#,
-        || {
-            let capture_path = temp_dir("dispatch-send").join("send.json");
-            unsafe {
-                std::env::set_var("NANOBOT_QQ_SEND_CAPTURE", &capture_path);
-            }
-
-            let mut config = Config::default();
-            config.channels.qq = QQConfig {
-                enabled: true,
-                app_id: "10001".to_string(),
-                secret: "secret".to_string(),
-                allow_from: vec!["user-9".to_string()],
-                ..QQConfig::default()
-            };
-            let dir = temp_dir("dispatch-send");
-            let mut app =
-                NanobotApp::new(config, Box::new(MessageToolProvider), &dir).expect("app should build");
-            let handle = app
-                .start_channel_runtimes()
-                .expect("runtime should start")
-                .pop()
-                .expect("qq runtime should exist");
-
-            let _ = app
-                .handle_cli_message("qq:openid-9", "queue a reply")
-                .expect("message should be handled");
-            let dispatches = app
-                .dispatch_outbound_once()
-                .expect("dispatcher should succeed");
-
-            handle.stop();
-            handle.join().expect("runtime should join");
-            unsafe {
-                std::env::remove_var("NANOBOT_QQ_SEND_CAPTURE");
-            }
-
-            assert_eq!(dispatches.len(), 1);
-            assert_eq!(dispatches[0].delivery, "sent");
-            let rendered = fs::read_to_string(capture_path).expect("capture file should exist");
-            assert!(rendered.contains("\"chat_id\": \"openid-9\""));
-            assert!(rendered.contains("\"content\": \"queued reply\""));
-        },
-    );
-}
-
-#[test]
-fn start_channel_runtimes_returns_channel_error_when_python_bridge_init_fails() {
-    with_bridge_source(
-        r#"
-class QQBotBridge:
-    def __init__(self, app_id, secret):
-        raise RuntimeError("bridge init failed")
-"#,
-        || {
-            let mut config = Config::default();
-            config.channels.qq = QQConfig {
-                enabled: true,
-                app_id: "10001".to_string(),
-                secret: "secret".to_string(),
-                allow_from: vec!["user-9".to_string()],
-                ..QQConfig::default()
-            };
-            let dir = temp_dir("runtime-error");
-            let app =
-                NanobotApp::new(config, Box::new(StaticProvider::default()), &dir).expect("app should build");
-
-            match app.start_channel_runtimes() {
-                Ok(_) => panic!("runtime should fail"),
-                Err(crate::AppError::Channel(error)) => {
-                    assert!(error.contains("bridge init failed"));
-                }
-                Err(other) => panic!("unexpected error: {other}"),
-            }
-        },
-    );
+    assert_eq!(dispatches[0].delivery, "skipped:unsupported_channel");
 }
 
 #[test]
@@ -339,11 +298,9 @@ fn background_pump_emits_heartbeat_and_cron_records() {
 
     assert!(records.iter().any(|record| record.chat_id == "heartbeat"));
     assert!(records.iter().any(|record| record.chat_id == "cron:digest"));
-    assert!(
-        records
-            .iter()
-            .any(|record| record.rendered.contains("payload=send-digest"))
-    );
+    assert!(records
+        .iter()
+        .any(|record| record.rendered.contains("payload=send-digest")));
 }
 
 #[test]
@@ -362,16 +319,12 @@ fn background_loop_collects_records_across_ticks() {
         .run_background_loop(0, 10, 4)
         .expect("background loop should work");
 
-    assert!(
-        records
-            .iter()
-            .any(|record| record.rendered.contains("heartbeat"))
-    );
-    assert!(
-        records
-            .iter()
-            .any(|record| record.rendered.contains("payload=send-digest"))
-    );
+    assert!(records
+        .iter()
+        .any(|record| record.rendered.contains("heartbeat")));
+    assert!(records
+        .iter()
+        .any(|record| record.rendered.contains("payload=send-digest")));
 }
 
 #[test]
@@ -392,11 +345,9 @@ fn background_worker_runs_ticks_in_thread() {
 
     assert!(records.iter().any(|record| record.chat_id == "heartbeat"));
     assert!(records.iter().any(|record| record.chat_id == "cron:digest"));
-    assert!(
-        records
-            .iter()
-            .any(|record| record.rendered.contains("payload=send-digest"))
-    );
+    assert!(records
+        .iter()
+        .any(|record| record.rendered.contains("payload=send-digest")));
 }
 
 #[test]
@@ -411,12 +362,12 @@ fn app_processes_inbound_messages_from_bus() {
 
     app.bus
         .publish_inbound(nanobot_bus::InboundMessage {
-            channel: "feishu".to_string(),
-            sender_id: "ou_1".to_string(),
-            chat_id: "oc_9".to_string(),
+            channel: "generic".to_string(),
+            sender_id: "sender-1".to_string(),
+            chat_id: "chat-9".to_string(),
             content: "hello from inbound".to_string(),
             media: Vec::new(),
-            metadata: std::collections::HashMap::new(),
+            metadata: HashMap::new(),
             session_key_override: None,
         })
         .expect("inbound should publish");
@@ -428,7 +379,7 @@ fn app_processes_inbound_messages_from_bus() {
     assert_eq!(processed, 1);
     let session = app
         .session_manager
-        .load("feishu:oc_9")
+        .load("generic:chat-9")
         .expect("session should load")
         .expect("session should exist");
     assert_eq!(session.messages.len(), 2);
@@ -458,6 +409,46 @@ fn schedule_cron_job_returns_duplicate_name_error() {
 }
 
 struct MessageToolProvider;
+
+struct FakeChannel {
+    name: &'static str,
+    allow_from: Vec<String>,
+    deliveries: Arc<Mutex<Vec<nanobot_channels::OutboundMessage>>>,
+}
+
+impl FakeChannel {
+    fn new(
+        name: &'static str,
+        deliveries: Arc<Mutex<Vec<nanobot_channels::OutboundMessage>>>,
+    ) -> Self {
+        Self {
+            name,
+            allow_from: vec!["*".to_string()],
+            deliveries,
+        }
+    }
+}
+
+impl Channel for FakeChannel {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn allow_from(&self) -> &[String] {
+        &self.allow_from
+    }
+
+    fn send(
+        &self,
+        msg: &nanobot_channels::OutboundMessage,
+    ) -> Result<(), nanobot_channels::ChannelError> {
+        self.deliveries
+            .lock()
+            .expect("deliveries lock")
+            .push(msg.clone());
+        Ok(())
+    }
+}
 
 impl LlmProvider for MessageToolProvider {
     fn chat(&self, request: ChatRequest) -> Result<LlmResponse, ProviderError> {

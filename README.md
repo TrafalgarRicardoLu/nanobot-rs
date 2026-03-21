@@ -4,9 +4,9 @@
 
 It currently includes:
 
-- A Cargo workspace with the core app, CLI, config, provider, session, tools, cron, heartbeat, and channel crates
+- A Cargo workspace with the core app, CLI, config, provider, session, tools, cron, heartbeat, and generic channel runtime crates
 - A runnable CLI binary in `crates/cli`
-- Feishu and QQ channel implementations
+- A generic channel abstraction in `crates/channels` that host applications can wire to concrete transports
 - The existing WhatsApp bridge assets under `bridge/`
 
 ## Workspace Layout
@@ -17,8 +17,6 @@ It currently includes:
 ├── crates/
 │   ├── app
 │   ├── bus
-│   ├── channel-feishu
-│   ├── channel-qq
 │   ├── channels
 │   ├── cli
 │   ├── config
@@ -80,3 +78,4 @@ cargo run -p nanobot-cli -- serve
 
 - This repository is intentionally Rust-only. The original Python package, Python tests, and packaging files were not carried over.
 - The current implementation is the extracted Rust rewrite as it exists today, not a full feature-parity port of the original nanobot project.
+- Concrete inbound and outbound channels are no longer bundled in this workspace. Integrators are expected to provide channel implementations against the shared runtime contract.

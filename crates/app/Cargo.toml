@@ -10,8 +10,6 @@ doctest = false
 
 [dependencies]
 nanobot-bus = { path = "../bus" }
-nanobot-channel-feishu = { path = "../channel-feishu" }
-nanobot-channel-qq = { path = "../channel-qq" }
 nanobot-channels = { path = "../channels" }
 nanobot-config = { path = "../config" }
 nanobot-core = { path = "../core" }

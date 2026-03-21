@@ -1,20 +1,19 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use nanobot_bus::{InboundMessage, MessageBus, OutboundMessage};
-use nanobot_channel_feishu::FeishuChannel;
-use nanobot_channel_qq::QQChannel;
 use nanobot_channels::{Channel, ChannelRuntimeHandle};
 use nanobot_config::Config;
 use nanobot_core::{AgentError, AgentLoop};
 use nanobot_cron::{CronError, CronService};
 use nanobot_heartbeat::HeartbeatService;
-use nanobot_provider::{LlmProvider, build_provider_from_config};
+use nanobot_provider::{build_provider_from_config, LlmProvider};
 use nanobot_session::{SessionError, SessionManager};
 use thiserror::Error;
 
@@ -35,8 +34,6 @@ pub struct NanobotApp {
     agent_loop: AgentLoop,
     session_manager: SessionManager,
     bus: MessageBus,
-    feishu_channel: Option<FeishuChannel>,
-    qq_channel: Option<QQChannel>,
     channels: Vec<Box<dyn Channel>>,
     cron: CronService,
     heartbeat: HeartbeatService,
@@ -72,35 +69,42 @@ impl NanobotApp {
         Self::new(config, provider, workspace)
     }
 
+    pub fn from_config_with_channels(
+        config: Config,
+        workspace: impl Into<PathBuf>,
+        channels: Vec<Box<dyn Channel>>,
+    ) -> Result<Self, AppError> {
+        let provider = build_provider_from_config(&config);
+        Self::new_with_channels(config, provider, workspace, channels)
+    }
+
     pub fn new(
         config: Config,
         provider: Box<dyn LlmProvider>,
         workspace: impl Into<PathBuf>,
     ) -> Result<Self, AppError> {
+        Self::new_with_channels(config, provider, workspace, Vec::new())
+    }
+
+    pub fn new_with_channels(
+        config: Config,
+        provider: Box<dyn LlmProvider>,
+        workspace: impl Into<PathBuf>,
+        channels: Vec<Box<dyn Channel>>,
+    ) -> Result<Self, AppError> {
         let workspace = workspace.into();
         let session_manager = SessionManager::new(workspace.join("sessions"))?;
         let bus = MessageBus::new();
-        let mut channels: Vec<Box<dyn Channel>> = Vec::new();
-        let feishu_channel = if config.channels.feishu.enabled {
-            Some(FeishuChannel::new(config.channels.feishu.clone()))
-        } else {
-            None
-        };
-        let qq_channel = if config.channels.qq.enabled {
-            Some(QQChannel::new(config.channels.qq.clone()))
-        } else {
-            None
-        };
-        if config.channels.feishu.enabled {
-            channels.push(Box::new(FeishuChannel::new(config.channels.feishu.clone())));
-        }
-        if config.channels.qq.enabled {
-            channels.push(Box::new(
-                qq_channel
-                    .clone()
-                    .expect("qq channel should exist when enabled"),
-            ));
-        }
+        let enabled_channel_kinds: HashSet<_> = config
+            .channels
+            .iter()
+            .filter(|channel| channel.enabled)
+            .map(|channel| channel.kind.as_str())
+            .collect();
+        let channels = channels
+            .into_iter()
+            .filter(|channel| enabled_channel_kinds.contains(channel.name()))
+            .collect();
         let provider_model = provider.default_model().to_string();
         let mut agent_loop = AgentLoop::new(provider_model.clone());
         agent_loop.set_workspace_root(&workspace);
@@ -109,8 +113,6 @@ impl NanobotApp {
             agent_loop,
             session_manager,
             bus,
-            feishu_channel,
-            qq_channel,
             channels,
             cron: CronService::default(),
             heartbeat: HeartbeatService::new(30),
@@ -257,17 +259,10 @@ impl NanobotApp {
     pub fn start_channel_runtimes(&self) -> Result<Vec<ChannelRuntimeHandle>, AppError> {
         let inbound_tx = self.bus.inbound_publisher();
         let mut handles = Vec::new();
-        if let Some(channel) = &self.feishu_channel {
+        for channel in &self.channels {
             if let Some(handle) = channel.spawn_inbound_runtime(inbound_tx.clone()) {
                 handles.push(handle);
             }
-        }
-        if let Some(channel) = &self.qq_channel {
-            handles.push(
-                channel
-                    .spawn_inbound_runtime(inbound_tx.clone())
-                    .map_err(AppError::Channel)?,
-            );
         }
         Ok(handles)
     }
@@ -330,49 +325,20 @@ fn split_session_key(session_key: &str) -> (String, String) {
 
 impl NanobotApp {
     fn render_outbound(&self, msg: &OutboundMessage) -> String {
-        match msg.channel.as_str() {
-            "feishu" => self
-                .channels
-                .iter()
-                .find(|channel| channel.name() == "feishu")
-                .map(|_| msg.content.clone())
-                .unwrap_or_else(|| msg.content.clone()),
-            "qq" => self
-                .channels
-                .iter()
-                .find(|channel| channel.name() == "qq")
-                .map(|_| msg.content.clone())
-                .unwrap_or_else(|| msg.content.clone()),
-            _ => msg.content.clone(),
-        }
+        msg.content.clone()
     }
 
     fn deliver_outbound(&self, msg: &OutboundMessage) -> String {
-        match msg.channel.as_str() {
-            "feishu" => {
-                if let Some(channel) = &self.feishu_channel {
-                    match channel.fetch_access_token_via_curl() {
-                        Ok(token) => match channel.send_via_curl(&token, &msg.chat_id, msg) {
-                            Ok(_) => "sent".to_string(),
-                            Err(error) => format!("send_failed:{error}"),
-                        },
-                        Err(error) => format!("token_failed:{error}"),
-                    }
-                } else {
-                    "skipped:channel_disabled".to_string()
-                }
-            }
-            "qq" => {
-                if let Some(channel) = &self.qq_channel {
-                    match channel.send(msg) {
-                        Ok(_) => "sent".to_string(),
-                        Err(error) => format!("send_failed:{error}"),
-                    }
-                } else {
-                    "skipped:channel_disabled".to_string()
-                }
-            }
-            _ => "skipped:unsupported_channel".to_string(),
+        match self
+            .channels
+            .iter()
+            .find(|channel| channel.name() == msg.channel)
+        {
+            Some(channel) => match channel.send(msg) {
+                Ok(_) => "sent".to_string(),
+                Err(error) => format!("send_failed:{error}"),
+            },
+            None => "skipped:unsupported_channel".to_string(),
         }
     }
 }

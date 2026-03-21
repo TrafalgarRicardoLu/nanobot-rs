@@ -7,3 +7,5 @@ authors.workspace = true
 
 [dependencies]
 nanobot-bus = { path = "../bus" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }

@@ -1,4 +1,7 @@
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{Error as DeError, Deserializer},
+    Deserialize, Serialize,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -57,49 +60,29 @@ impl Default for AgentDefaults {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ChannelsConfig {
-    pub feishu: FeishuConfig,
-    pub qq: QQConfig,
-}
+pub type ChannelsConfig = Vec<ChannelConfig>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct FeishuConfig {
+#[serde(rename_all = "camelCase")]
+pub struct ChannelConfig {
+    #[serde(deserialize_with = "deserialize_channel_kind")]
+    pub kind: String,
+    #[serde(default)]
     pub enabled: bool,
-    pub app_id: String,
-    pub app_secret: String,
-    pub encrypt_key: String,
-    pub verification_token: String,
-    pub websocket_url: String,
+    #[serde(default)]
     pub allow_from: Vec<String>,
-    pub react_emoji: String,
 }
 
-impl Default for FeishuConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            app_id: String::new(),
-            app_secret: String::new(),
-            encrypt_key: String::new(),
-            verification_token: String::new(),
-            websocket_url: String::new(),
-            allow_from: Vec::new(),
-            react_emoji: "THUMBSUP".to_string(),
-        }
+fn deserialize_channel_kind<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let kind = String::deserialize(deserializer)?;
+    if kind.trim().is_empty() {
+        return Err(D::Error::custom("channel kind must not be empty"));
     }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, rename_all = "camelCase")]
-pub struct QQConfig {
-    pub enabled: bool,
-    pub app_id: String,
-    pub secret: String,
-    pub websocket_url: String,
-    pub allow_from: Vec<String>,
+    Ok(kind)
 }
 
 #[cfg(test)]

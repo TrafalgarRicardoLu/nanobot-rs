@@ -1,8 +1,14 @@
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use std::thread::JoinHandle;
+
+use thiserror::Error;
+
+pub use nanobot_bus::{InboundMessage, MessageBus, OutboundMessage};
+
+pub type InboundPublisher = tokio::sync::mpsc::UnboundedSender<InboundMessage>;
 
 pub trait Channel: Send + Sync {
     fn name(&self) -> &'static str;
@@ -10,6 +16,14 @@ pub trait Channel: Send + Sync {
 
     fn is_allowed(&self, sender_id: &str) -> bool {
         is_allowed(self.allow_from(), sender_id)
+    }
+
+    fn spawn_inbound_runtime(&self, _inbound_tx: InboundPublisher) -> Option<ChannelRuntimeHandle> {
+        None
+    }
+
+    fn send(&self, _msg: &OutboundMessage) -> Result<(), ChannelError> {
+        Err(ChannelError::UnsupportedOperation)
     }
 }
 
@@ -26,6 +40,13 @@ pub fn is_allowed(allow_from: &[String], sender_id: &str) -> bool {
     sender_id
         .split('|')
         .any(|segment| allow_from.iter().any(|entry| entry == segment))
+}
+
+#[non_exhaustive]
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ChannelError {
+    #[error("unsupported operation")]
+    UnsupportedOperation,
 }
 
 pub struct ChannelRuntimeHandle {

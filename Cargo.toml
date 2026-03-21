@@ -2,8 +2,6 @@
 members = [
     "crates/app",
     "crates/bus",
-    "crates/channel-feishu",
-    "crates/channel-qq",
     "crates/channels",
     "crates/cli",
     "crates/config",
