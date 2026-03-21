@@ -1,0 +1,25 @@
+[package]
+name = "nanobot-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+nanobot-bus = { path = "../bus" }
+nanobot-channel-feishu = { path = "../channel-feishu" }
+nanobot-channel-qq = { path = "../channel-qq" }
+nanobot-channels = { path = "../channels" }
+nanobot-config = { path = "../config" }
+nanobot-core = { path = "../core" }
+nanobot-cron = { path = "../cron" }
+nanobot-heartbeat = { path = "../heartbeat" }
+nanobot-provider = { path = "../provider" }
+nanobot-session = { path = "../session" }
+nanobot-tools = { path = "../tools" }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

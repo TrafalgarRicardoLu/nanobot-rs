@@ -1,16 +1,16 @@
 [workspace]
 members = [
-    "crates/nanobot-app",
-    "crates/nanobot-bus",
-    "crates/nanobot-channel-feishu",
-    "crates/nanobot-channel-qq",
-    "crates/nanobot-channels",
-    "crates/nanobot-cli",
-    "crates/nanobot-config",
-    "crates/nanobot-core", "crates/nanobot-cron", "crates/nanobot-heartbeat",
-    "crates/nanobot-provider",
-    "crates/nanobot-session",
-    "crates/nanobot-tools",
+    "crates/app",
+    "crates/bus",
+    "crates/channel-feishu",
+    "crates/channel-qq",
+    "crates/channels",
+    "crates/cli",
+    "crates/config",
+    "crates/core", "crates/cron", "crates/heartbeat",
+    "crates/provider",
+    "crates/session",
+    "crates/tools",
 ]
 resolver = "2"
 

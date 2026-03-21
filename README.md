@@ -5,7 +5,7 @@
 It currently includes:
 
 - A Cargo workspace with the core app, CLI, config, provider, session, tools, cron, heartbeat, and channel crates
-- A runnable CLI binary in `crates/nanobot-cli`
+- A runnable CLI binary in `crates/cli`
 - Feishu and QQ channel implementations
 - The existing WhatsApp bridge assets under `bridge/`
 
@@ -15,19 +15,19 @@ It currently includes:
 .
 ├── Cargo.toml
 ├── crates/
-│   ├── nanobot-app
-│   ├── nanobot-bus
-│   ├── nanobot-channel-feishu
-│   ├── nanobot-channel-qq
-│   ├── nanobot-channels
-│   ├── nanobot-cli
-│   ├── nanobot-config
-│   ├── nanobot-core
-│   ├── nanobot-cron
-│   ├── nanobot-heartbeat
-│   ├── nanobot-provider
-│   ├── nanobot-session
-│   └── nanobot-tools
+│   ├── app
+│   ├── bus
+│   ├── channel-feishu
+│   ├── channel-qq
+│   ├── channels
+│   ├── cli
+│   ├── config
+│   ├── core
+│   ├── cron
+│   ├── heartbeat
+│   ├── provider
+│   ├── session
+│   └── tools
 └── bridge/
 ```
 
