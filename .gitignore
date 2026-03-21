@@ -1,0 +1,6 @@
+/target
+/node_modules
+/dist
+/.nanobot-rs
+.DS_Store
+*.log
