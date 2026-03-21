@@ -9,7 +9,9 @@ authors.workspace = true
 doctest = false
 
 [dependencies]
+log.workspace = true
 nanobot-config = { path = "../config" }
+reqwest.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 thiserror.workspace = true

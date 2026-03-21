@@ -32,14 +32,25 @@ pub struct ChannelRuntimeHandle {
     name: &'static str,
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+    stop_hook: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl ChannelRuntimeHandle {
     pub fn new(name: &'static str, stop: Arc<AtomicBool>, join: JoinHandle<()>) -> Self {
+        Self::with_stop_hook(name, stop, join, Box::new(|| {}))
+    }
+
+    pub fn with_stop_hook(
+        name: &'static str,
+        stop: Arc<AtomicBool>,
+        join: JoinHandle<()>,
+        stop_hook: Box<dyn Fn() + Send + Sync>,
+    ) -> Self {
         Self {
             name,
             stop,
             join: Some(join),
+            stop_hook: Some(stop_hook),
         }
     }
 
@@ -49,6 +60,9 @@ impl ChannelRuntimeHandle {
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(stop_hook) = &self.stop_hook {
+            stop_hook();
+        }
     }
 
     pub fn join(mut self) -> std::thread::Result<()> {
@@ -57,17 +71,4 @@ impl ChannelRuntimeHandle {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::is_allowed;
-
-    #[test]
-    fn empty_allow_list_denies_access() {
-        assert!(!is_allowed(&[], "user-1"));
-    }
-
-    #[test]
-    fn wildcard_and_segment_matching_are_allowed() {
-        assert!(is_allowed(&["*".to_string()], "user-1"));
-        assert!(is_allowed(&["thread-9".to_string()], "user-1|thread-9"));
-    }
-}
+mod tests;
