@@ -31,7 +31,11 @@ impl LlmProvider for StaticProvider {
             .find(|message| message.role == "user")
             .ok_or(ProviderError::EmptyResponse)?;
         Ok(LlmResponse {
-            content: Some(format!("{}: {}", self.response_prefix, last_user.content)),
+            content: Some(format!(
+                "{}: {}",
+                self.response_prefix,
+                last_user.content.clone().unwrap_or_default()
+            )),
             tool_calls: Vec::new(),
             finish_reason: "stop".to_string(),
         })

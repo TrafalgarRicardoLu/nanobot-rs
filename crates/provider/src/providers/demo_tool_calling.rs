@@ -11,7 +11,8 @@ impl LlmProvider for DemoToolCallingProvider {
             .iter()
             .rev()
             .find(|message| message.role == "user")
-            .map(|message| message.content.to_ascii_lowercase())
+            .and_then(|message| message.content.clone())
+            .map(|content| content.to_ascii_lowercase())
             .unwrap_or_default();
 
         let last_tool = request
@@ -19,7 +20,7 @@ impl LlmProvider for DemoToolCallingProvider {
             .iter()
             .rev()
             .find(|message| message.role == "tool")
-            .map(|message| message.content.clone());
+            .and_then(|message| message.content.clone());
 
         if let Some(tool_result) = last_tool {
             return Ok(LlmResponse {

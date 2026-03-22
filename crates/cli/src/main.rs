@@ -39,9 +39,9 @@ enum Command {
         config: PathBuf,
         #[clap(long, default_value = ".nanobot-rs/workspace")]
         workspace: PathBuf,
-        #[clap(long, default_value_t = 5)]
-        max_iterations: usize,
-        #[clap(long, default_value_t = 10)]
+        #[clap(long)]
+        max_iterations: Option<usize>,
+        #[clap(long, default_value_t = 1000)]
         interval_ms: u64,
     },
     Gateway {
@@ -53,14 +53,15 @@ enum Command {
         config: PathBuf,
         #[clap(long, default_value = ".nanobot-rs/workspace")]
         workspace: PathBuf,
-        #[clap(long, default_value_t = 5)]
-        max_iterations: usize,
-        #[clap(long, default_value_t = 10)]
+        #[clap(long)]
+        max_iterations: Option<usize>,
+        #[clap(long, default_value_t = 1000)]
         interval_ms: u64,
     },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_logger();
     let cli = Cli::parse();
     match cli.command {
         Command::Onboard { config } => {
@@ -132,6 +133,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn init_logger() {
+    let env = env_logger::Env::default().default_filter_or("info");
+    let _ = env_logger::Builder::from_env(env).try_init();
+}
+
 fn load_or_default_config(path: &PathBuf) -> Result<Config, Box<dyn std::error::Error>> {
     if path.exists() {
         Ok(Config::from_json_file(path)?)
@@ -179,53 +185,55 @@ fn run_interactive_session(
 fn run_service_mode(
     config: Config,
     workspace: PathBuf,
-    max_iterations: usize,
+    max_iterations: Option<usize>,
     interval_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    run_gateway_loop(config, workspace, max_iterations, interval_ms, None)
+    run_gateway_loop(config, workspace, max_iterations, interval_ms)
 }
 
 fn run_gateway_mode(
     config: Config,
     workspace: PathBuf,
-    port: u16,
-    verbose: bool,
-    max_iterations: usize,
+    _port: u16,
+    _verbose: bool,
+    max_iterations: Option<usize>,
     interval_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mode = if verbose {
-        format!("gateway:{port}:verbose")
-    } else {
-        format!("gateway:{port}")
-    };
-    run_gateway_loop(config, workspace, max_iterations, interval_ms, Some(mode))
+    run_gateway_loop(config, workspace, max_iterations, interval_ms)
 }
 
 fn run_gateway_loop(
     config: Config,
     workspace: PathBuf,
-    max_iterations: usize,
+    max_iterations: Option<usize>,
     interval_ms: u64,
-    session_seed: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&workspace)?;
     let app = NanobotApp::from_config(config, &workspace)?;
     let shared = app.into_shared();
-    if let Some(seed) = session_seed {
-        let mut app = shared.lock().expect("service app lock");
-        let _ = app.handle_cli_message("system:gateway", &seed)?;
-    }
     let channel_handles = {
         let app = shared.lock().expect("service app lock");
         app.start_channel_runtimes()?
     };
-    let background =
-        NanobotApp::spawn_background_worker(shared.clone(), 0, 1, interval_ms, max_iterations);
-    for _ in 0..max_iterations {
+    let background = NanobotApp::spawn_background_worker(
+        shared.clone(),
+        0,
+        1,
+        interval_ms,
+        max_iterations.unwrap_or(usize::MAX),
+    );
+    let mut iterations = 0usize;
+    loop {
+        if let Some(limit) = max_iterations {
+            if iterations >= limit {
+                break;
+            }
+        }
         {
             let mut app = shared.lock().expect("service app lock");
             let _ = app.process_inbound_once()?;
         }
+        iterations = iterations.saturating_add(1);
         if interval_ms > 0 {
             std::thread::sleep(Duration::from_millis(interval_ms));
         }

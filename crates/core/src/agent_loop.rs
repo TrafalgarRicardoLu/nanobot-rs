@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use nanobot_provider::{ChatMessage, ChatRequest, LlmProvider, LlmResponse};
-use nanobot_session::Session;
+use log::info;
+use nanobot_provider::{ChatMessage, ChatRequest, LlmProvider, LlmResponse, ToolCallMessage};
+use nanobot_session::{Session, StoredMessage, StoredToolCall};
 
 use crate::{
     AgentError, AgentEvent, AgentLoop, AgentRunConfig, AgentRunReport, AgentRunStatus,
@@ -107,6 +108,10 @@ impl AgentLoop {
         session: &mut Session,
         user_input: &str,
     ) -> Result<AgentRunReport, AgentError> {
+        info!(
+            "agent loop run_turn session_key={:?} user_input={user_input:?}",
+            session.key
+        );
         let mut events = Vec::new();
         let input = user_input.trim();
         events.push(AgentEvent::RunStarted {
@@ -151,6 +156,10 @@ impl AgentLoop {
         }
 
         self.persist_user_message(session, input);
+        info!(
+            "agent loop persisted user message session_messages={:?}",
+            session.messages
+        );
 
         self.continue_run(provider, session, 0, skill_activations, events, 0, 0, None)
     }
@@ -198,6 +207,7 @@ impl AgentLoop {
             }
 
             let response = if let Some(response) = pending_response.take() {
+                info!("agent loop reusing pending provider response={response:?}");
                 response
             } else {
                 steps += 1;
@@ -211,25 +221,31 @@ impl AgentLoop {
                             .filter_map(|name| self.skills.get(name))
                             .map(|skill| ChatMessage {
                                 role: "system".to_string(),
-                                content: skill.instructions.clone(),
+                                content: Some(skill.instructions.clone()),
+                                tool_call_id: None,
+                                tool_calls: Vec::new(),
                             })
                             .collect::<Vec<_>>();
                         messages.extend(
                             session
                                 .get_history(self.max_history)
                                 .into_iter()
-                                .filter(|item| !self.should_drop_message(&item.content))
-                                .map(|item| ChatMessage {
-                                    role: item.role,
-                                    content: item.content,
-                                }),
+                                .filter(|item| {
+                                    !self.should_drop_message(
+                                        item.content.as_deref().unwrap_or_default(),
+                                    ) || !item.tool_calls.is_empty()
+                                        || item.tool_call_id.is_some()
+                                })
+                                .map(stored_message_to_chat_message),
                         );
                         messages
                     },
                     tools: self.tools.names(),
                     model: Some(self.model.clone()),
                 };
+                info!("agent loop provider request step={steps} request={request:?}");
                 let response = provider.chat(request)?;
+                info!("agent loop provider response step={steps} response={response:?}");
                 events.push(AgentEvent::ProviderResponded {
                     finish_reason: response.finish_reason.clone(),
                     tool_calls: response.tool_calls.len(),
@@ -255,7 +271,29 @@ impl AgentLoop {
             };
 
             if !response.tool_calls.is_empty() {
+                session.add_structured_message(StoredMessage {
+                    role: "assistant".to_string(),
+                    content: response.content.clone(),
+                    timestamp: StoredMessage::new("assistant", "").timestamp,
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: response
+                        .tool_calls
+                        .iter()
+                        .map(|call| StoredToolCall {
+                            id: call.id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                        })
+                        .collect(),
+                    metadata: Default::default(),
+                });
+                info!(
+                    "agent loop stored assistant tool calls session_messages={:?}",
+                    session.messages
+                );
                 for tool_call in response.tool_calls {
+                    info!("agent loop tool_call step={steps} tool_call={tool_call:?}");
                     tool_calls += 1;
                     if self.run_config.emit_tool_hints {
                         events.push(AgentEvent::ToolHint {
@@ -287,7 +325,18 @@ impl AgentLoop {
                             .subagents
                             .run(agent_name, task)
                             .map_err(AgentError::Tool)?;
-                        session.add_message("tool", format!("{agent_name} => {result}"));
+                        info!(
+                            "agent loop subagent result step={steps} agent_name={agent_name:?} result={result:?}"
+                        );
+                        session.add_structured_message(StoredMessage {
+                            role: "tool".to_string(),
+                            content: Some(result.clone()),
+                            timestamp: StoredMessage::new("tool", "").timestamp,
+                            name: None,
+                            tool_call_id: Some(tool_call.id.clone()),
+                            tool_calls: Vec::new(),
+                            metadata: Default::default(),
+                        });
                         events.push(AgentEvent::SubagentFinished {
                             name: agent_name.to_string(),
                             result,
@@ -302,8 +351,24 @@ impl AgentLoop {
                         .tools
                         .execute(&tool_call.name, tool_call.arguments)
                         .map_err(|error| AgentError::Tool(error.to_string()))?;
+                    info!(
+                        "agent loop tool result step={steps} tool_name={:?} result={result:?}",
+                        tool_call.name
+                    );
                     if !self.should_drop_message(&result) {
-                        session.add_message("tool", format!("{} => {}", tool_call.name, result));
+                        session.add_structured_message(StoredMessage {
+                            role: "tool".to_string(),
+                            content: Some(result.clone()),
+                            timestamp: StoredMessage::new("tool", "").timestamp,
+                            name: None,
+                            tool_call_id: Some(tool_call.id.clone()),
+                            tool_calls: Vec::new(),
+                            metadata: Default::default(),
+                        });
+                        info!(
+                            "agent loop stored tool message session_messages={:?}",
+                            session.messages
+                        );
                     }
                     events.push(AgentEvent::ToolCallFinished {
                         name: tool_call.name,
@@ -326,6 +391,7 @@ impl AgentLoop {
             }
 
             if let Some(content) = response.content {
+                info!("agent loop assistant content step={steps} content={content:?}");
                 if self.should_drop_message(&content) {
                     events.push(AgentEvent::RunCompleted { steps });
                     return Ok(AgentRunReport {
@@ -339,6 +405,10 @@ impl AgentLoop {
                     });
                 }
                 session.add_message("assistant", content.clone());
+                info!(
+                    "agent loop stored assistant message session_messages={:?}",
+                    session.messages
+                );
                 events.push(AgentEvent::AssistantMessage {
                     content: content.clone(),
                 });
@@ -371,10 +441,11 @@ impl AgentLoop {
         if self.run_config.merge_consecutive_user {
             if let Some(last) = session.messages.last_mut() {
                 if last.role == "user" && !self.should_drop_message(input) {
-                    if last.content.is_empty() {
-                        last.content = input.to_string();
+                    let existing = last.content.clone().unwrap_or_default();
+                    if existing.is_empty() {
+                        last.content = Some(input.to_string());
                     } else {
-                        last.content = format!("{}\n{}", last.content, input);
+                        last.content = Some(format!("{}\n{}", existing, input));
                     }
                     return;
                 }
@@ -387,5 +458,22 @@ impl AgentLoop {
 
     fn should_drop_message(&self, content: &str) -> bool {
         self.run_config.drop_empty_messages && content.trim().is_empty()
+    }
+}
+
+fn stored_message_to_chat_message(item: StoredMessage) -> ChatMessage {
+    ChatMessage {
+        role: item.role,
+        content: item.content,
+        tool_call_id: item.tool_call_id,
+        tool_calls: item
+            .tool_calls
+            .into_iter()
+            .map(|call| ToolCallMessage {
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments,
+            })
+            .collect(),
     }
 }

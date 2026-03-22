@@ -418,9 +418,66 @@ fn app_processes_inbound_messages_from_bus() {
         .expect("session should exist");
     assert_eq!(session.messages.len(), 2);
     assert_eq!(
-        session.messages[1].content,
+        session.messages[1].content.as_deref(),
+        Some("processed inbound: hello from inbound")
+    );
+}
+
+#[test]
+fn inbound_stop_response_is_published_back_to_source_channel() {
+    let dir = temp_dir("inbound-stop-response");
+    let deliveries = Arc::new(Mutex::new(Vec::new()));
+    let config = Config::from_json_str(
+        r#"{
+            "channels": [
+                {
+                    "kind": "generic",
+                    "enabled": true
+                }
+            ]
+        }"#,
+    )
+    .expect("config should parse");
+    let mut app = NanobotApp::new_with_channels(
+        config,
+        Box::new(StaticProvider::new("offline/test", "processed inbound")),
+        &dir,
+        vec![Box::new(FakeChannel::new("generic", deliveries.clone()))],
+    )
+    .expect("app should build");
+
+    app.bus
+        .publish_inbound(nanobot_bus::InboundMessage {
+            channel: "generic".to_string(),
+            sender_id: "sender-1".to_string(),
+            chat_id: "chat-9".to_string(),
+            content: "hello from inbound".to_string(),
+            media: Vec::new(),
+            metadata: HashMap::new(),
+            session_key_override: None,
+        })
+        .expect("inbound should publish");
+
+    let processed = app
+        .process_inbound_once()
+        .expect("inbound processing should succeed");
+    assert_eq!(processed, 1);
+
+    let dispatches = app
+        .dispatch_outbound_once()
+        .expect("dispatcher should succeed");
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].channel, "generic");
+    assert_eq!(dispatches[0].chat_id, "chat-9");
+    assert_eq!(
+        dispatches[0].rendered,
         "processed inbound: hello from inbound"
     );
+    assert_eq!(dispatches[0].delivery, "sent");
+
+    let sent = deliveries.lock().expect("deliveries lock");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].content, "processed inbound: hello from inbound");
 }
 
 #[test]
@@ -486,10 +543,14 @@ impl Channel for FakeChannel {
 
 impl LlmProvider for MessageToolProvider {
     fn chat(&self, request: ChatRequest) -> Result<LlmResponse, ProviderError> {
-        let already_has_tool = request
-            .messages
-            .iter()
-            .any(|message| message.role == "tool" && message.content.contains("queued message"));
+        let already_has_tool = request.messages.iter().any(|message| {
+            message.role == "tool"
+                && message
+                    .content
+                    .clone()
+                    .unwrap_or_default()
+                    .contains("queued message")
+        });
         if already_has_tool {
             return Ok(LlmResponse {
                 content: Some("done".to_string()),

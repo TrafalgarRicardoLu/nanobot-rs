@@ -1,65 +1,9 @@
-use std::io::{Cursor, Read, Write};
-use std::net::TcpListener;
-use std::thread;
+use std::io::Cursor;
 
 use nanobot_app::NanobotApp;
 use nanobot_provider::DemoToolCallingProvider;
 
 use super::*;
-
-fn spawn_openai_test_server(response_content: &str) -> (String, thread::JoinHandle<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-    let addr = listener.local_addr().expect("listener addr");
-    let response_content = response_content.to_string();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("request should connect");
-        let mut buffer = Vec::new();
-        loop {
-            let mut chunk = [0_u8; 1024];
-            let bytes_read = stream.read(&mut chunk).expect("request should be readable");
-            if bytes_read == 0 {
-                break;
-            }
-            buffer.extend_from_slice(&chunk[..bytes_read]);
-
-            let request = String::from_utf8_lossy(&buffer);
-            if let Some(headers_end) = request.find("\r\n\r\n") {
-                let content_length = request[..headers_end]
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        if name.eq_ignore_ascii_case("content-length") {
-                            value.trim().parse::<usize>().ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-                let body_len = buffer.len() - (headers_end + 4);
-                if body_len >= content_length {
-                    break;
-                }
-            }
-        }
-
-        let request = String::from_utf8_lossy(&buffer).to_string();
-        let response_body = format!(
-            r#"{{"choices":[{{"message":{{"content":"{}"}},"finish_reason":"stop"}}]}}"#,
-            response_content
-        );
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-            response_body.len(),
-            response_body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .expect("response should be writable");
-        request
-    });
-
-    (format!("http://{addr}/v1"), server)
-}
 
 #[test]
 fn interactive_session_stops_on_exit_command() {
@@ -79,43 +23,61 @@ fn interactive_session_stops_on_exit_command() {
 }
 
 #[test]
+fn logger_init_is_safe_to_call() {
+    init_logger();
+    init_logger();
+}
+
+#[test]
 fn serve_mode_runs_with_finite_iterations() {
     let dir = std::env::temp_dir().join(format!("nanobot-cli-serve-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir should exist");
 
-    run_service_mode(Config::default(), dir, 2, 0).expect("serve mode should run");
+    run_service_mode(Config::default(), dir, Some(2), 0).expect("serve mode should run");
 }
 
 #[test]
-fn gateway_mode_runs_with_original_command_shape() {
+fn gateway_mode_starts_without_seeding_a_gateway_session() {
     let dir = std::env::temp_dir().join(format!("nanobot-cli-gateway-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir should exist");
 
-    let (api_base, provider_server) = spawn_openai_test_server("echo: gateway:18790:verbose");
-    let config = Config::from_json_str(&format!(
-        r#"{{
-            "providers": {{
-                "openai": {{
-                    "apiKey": "sk-test",
-                    "apiBase": "{api_base}"
-                }}
-            }},
-            "agents": {{
-                "defaults": {{
-                    "model": "gpt-4o-mini",
-                    "provider": "openai"
-                }}
-            }}
-        }}"#
-    ))
-    .expect("config should parse");
+    run_gateway_mode(Config::default(), dir.clone(), 18790, true, Some(2), 0)
+        .expect("gateway mode should run");
 
-    run_gateway_mode(config, dir.clone(), 18790, true, 2, 0).expect("gateway mode should run");
-    provider_server.join().expect("provider server should join");
+    assert!(
+        !dir.join("sessions").join("system_gateway.jsonl").exists(),
+        "gateway startup should not enqueue a synthetic agent turn"
+    );
+}
 
-    let session = std::fs::read_to_string(dir.join("sessions").join("system_gateway.jsonl"))
-        .expect("gateway session should exist");
-    assert!(session.contains("gateway:18790:verbose"));
+#[test]
+fn cli_defaults_gateway_and_serve_to_infinite_with_one_second_interval() {
+    let serve = Cli::parse_from(["nanobot", "serve"]);
+    let gateway = Cli::parse_from(["nanobot", "gateway"]);
+
+    match serve.command {
+        Command::Serve {
+            max_iterations,
+            interval_ms,
+            ..
+        } => {
+            assert_eq!(max_iterations, None);
+            assert_eq!(interval_ms, 1000);
+        }
+        _ => panic!("expected serve command"),
+    }
+
+    match gateway.command {
+        Command::Gateway {
+            max_iterations,
+            interval_ms,
+            ..
+        } => {
+            assert_eq!(max_iterations, None);
+            assert_eq!(interval_ms, 1000);
+        }
+        _ => panic!("expected gateway command"),
+    }
 }

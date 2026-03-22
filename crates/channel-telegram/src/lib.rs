@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use api::{ReqwestTelegramApi, TelegramApi};
 pub use error::TelegramChannelError;
+use log::info;
 use mapping::inbound_from_update;
 use nanobot_channels::{
     Channel, ChannelError, ChannelRuntimeHandle, InboundPublisher, OutboundMessage,
@@ -84,18 +85,22 @@ impl Channel for TelegramChannel {
                     timeout_seconds: settings.poll_timeout_seconds,
                 }) {
                     Ok(updates) => {
+                        info!("telegram inbound poll returned updates={updates:?}");
                         for update in updates {
                             offset = Some(update.update_id + 1);
+                            info!("telegram inbound raw update={update:?}");
                             if let Some(inbound) =
                                 inbound_from_update(&allow_from, TELEGRAM_CHANNEL_NAME, update)
                             {
+                                info!("telegram inbound mapped message={inbound:?}");
                                 if inbound_tx.send(inbound).is_err() {
                                     return;
                                 }
                             }
                         }
                     }
-                    Err(_) => {
+                    Err(error) => {
+                        info!("telegram inbound poll error={error}");
                         thread::sleep(Duration::from_millis(250));
                     }
                 }
@@ -105,6 +110,7 @@ impl Channel for TelegramChannel {
     }
 
     fn send(&self, msg: &OutboundMessage) -> Result<(), ChannelError> {
+        info!("telegram outbound send request={msg:?}");
         if msg.content.trim().is_empty() {
             return Err(ChannelError::InvalidMessage(
                 "telegram outbound content must not be empty".to_string(),
@@ -126,6 +132,9 @@ impl Channel for TelegramChannel {
                 chat_id: msg.chat_id.clone(),
                 text: msg.content.clone(),
                 reply_to_message_id,
+            })
+            .map(|_| {
+                info!("telegram outbound send completed message={msg:?}");
             })
             .map_err(|error| ChannelError::Transport(error.to_string()))
     }

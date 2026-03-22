@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use log::info;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{
     UnboundedReceiver, UnboundedSender, error::TryRecvError, unbounded_channel,
@@ -53,6 +54,7 @@ impl MessageBus {
     }
 
     pub fn publish_inbound(&self, msg: InboundMessage) -> Result<(), &'static str> {
+        info!("message bus publish_inbound msg={msg:?}");
         self.inbound_tx
             .send(msg)
             .map_err(|_| "inbound channel closed")
@@ -64,7 +66,10 @@ impl MessageBus {
 
     pub fn try_consume_inbound(&mut self) -> Option<InboundMessage> {
         match self.inbound_rx.try_recv() {
-            Ok(msg) => Some(msg),
+            Ok(msg) => {
+                info!("message bus consume_inbound msg={msg:?}");
+                Some(msg)
+            }
             Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
         }
     }
@@ -74,6 +79,7 @@ impl MessageBus {
     }
 
     pub fn publish_outbound(&self, msg: OutboundMessage) -> Result<(), &'static str> {
+        info!("message bus publish_outbound msg={msg:?}");
         self.outbound_tx
             .send(msg)
             .map_err(|_| "outbound channel closed")
@@ -85,7 +91,10 @@ impl MessageBus {
 
     pub fn try_consume_outbound(&mut self) -> Option<OutboundMessage> {
         match self.outbound_rx.try_recv() {
-            Ok(msg) => Some(msg),
+            Ok(msg) => {
+                info!("message bus consume_outbound msg={msg:?}");
+                Some(msg)
+            }
             Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
         }
     }

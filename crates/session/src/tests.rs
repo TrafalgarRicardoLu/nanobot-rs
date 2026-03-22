@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{Session, SessionManager, StoredMessage};
+use super::{Session, SessionManager, StoredMessage, StoredToolCall};
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("nanobot-rs-{name}-{}", std::process::id()));
@@ -57,7 +57,7 @@ fn get_history_skips_leading_non_user_messages_after_consolidation() {
 
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].role, "user");
-    assert_eq!(history[0].content, "hello");
+    assert_eq!(history[0].content.as_deref(), Some("hello"));
     assert_eq!(history[1].role, "assistant");
 }
 
@@ -68,11 +68,15 @@ fn saves_and_loads_structured_message_fields() {
     let mut session = Session::new("cli:structured");
     session.add_structured_message(StoredMessage {
         role: "assistant".to_string(),
-        content: "tool call".to_string(),
+        content: Some("tool call".to_string()),
         timestamp: "1".to_string(),
         name: Some("assistant".to_string()),
         tool_call_id: Some("call-1".to_string()),
-        tool_calls: vec!["filesystem".to_string()],
+        tool_calls: vec![StoredToolCall {
+            id: "call-1".to_string(),
+            name: "filesystem".to_string(),
+            arguments: serde_json::json!({"path": "demo.txt"}),
+        }],
         metadata: HashMap::from([("kind".to_string(), "tool".to_string())]),
     });
 
@@ -84,7 +88,11 @@ fn saves_and_loads_structured_message_fields() {
 
     assert_eq!(loaded.messages[0].tool_call_id.as_deref(), Some("call-1"));
     assert_eq!(
-        loaded.messages[0].tool_calls,
+        loaded.messages[0]
+            .tool_calls
+            .iter()
+            .map(|call| call.name.clone())
+            .collect::<Vec<_>>(),
         vec!["filesystem".to_string()]
     );
     assert_eq!(
@@ -101,11 +109,15 @@ fn consolidate_writes_memory_and_history_files() {
     session.add_message("user", "track my todos");
     session.add_structured_message(StoredMessage {
         role: "assistant".to_string(),
-        content: "used filesystem".to_string(),
+        content: Some("used filesystem".to_string()),
         timestamp: "2".to_string(),
         name: None,
         tool_call_id: None,
-        tool_calls: vec!["filesystem".to_string()],
+        tool_calls: vec![StoredToolCall {
+            id: "call-2".to_string(),
+            name: "filesystem".to_string(),
+            arguments: serde_json::json!({}),
+        }],
         metadata: HashMap::new(),
     });
 

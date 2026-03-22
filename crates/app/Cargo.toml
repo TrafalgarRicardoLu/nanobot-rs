@@ -9,6 +9,7 @@ authors.workspace = true
 doctest = false
 
 [dependencies]
+log.workspace = true
 nanobot-bus = { path = "../bus" }
 nanobot-channel-telegram = { path = "../channel-telegram" }
 nanobot-channels = { path = "../channels" }

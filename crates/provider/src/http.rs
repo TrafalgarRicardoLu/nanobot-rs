@@ -1,4 +1,7 @@
+use std::error::Error;
+
 use crate::ProviderError;
+use log::error;
 use reqwest::Method;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -38,12 +41,24 @@ impl HttpExecutor for ReqwestExecutor {
             .headers(headers)
             .body(request.body.clone())
             .send()
-            .map_err(|error| ProviderError::Request(error.to_string()))?;
+            .map_err(|error| {
+                let message = format_reqwest_error(&error);
+                error!(
+                    "http executor send failed url={} method={} error={}",
+                    request.url, request.method, message
+                );
+                ProviderError::Request(message)
+            })?;
 
         let status = response.status();
-        let body = response
-            .text()
-            .map_err(|error| ProviderError::Request(error.to_string()))?;
+        let body = response.text().map_err(|error| {
+            let message = format_reqwest_error(&error);
+            error!(
+                "http executor read body failed url={} method={} error={}",
+                request.url, request.method, message
+            );
+            ProviderError::Request(message)
+        })?;
         if !status.is_success() {
             let message = if body.trim().is_empty() {
                 status.to_string()
@@ -58,3 +73,20 @@ impl HttpExecutor for ReqwestExecutor {
 }
 
 pub type CurlExecutor = ReqwestExecutor;
+
+fn format_reqwest_error(error: &reqwest::Error) -> String {
+    let mut sources = Vec::new();
+    let mut current = error.source();
+    while let Some(source) = current {
+        sources.push(source.to_string());
+        current = source.source();
+    }
+
+    let source_suffix = if sources.is_empty() {
+        String::new()
+    } else {
+        format!("; sources={}", sources.join(" | "))
+    };
+
+    format!("{error}; debug={error:?}{source_suffix}")
+}

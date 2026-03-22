@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+log.workspace = true
 nanobot-bus = { path = "../bus" }
 nanobot-provider = { path = "../provider" }
 nanobot-session = { path = "../session" }

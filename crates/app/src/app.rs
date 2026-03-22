@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use log::info;
 use nanobot_bus::{InboundMessage, MessageBus, OutboundMessage};
 use nanobot_channels::Channel;
 use nanobot_config::Config;
@@ -91,13 +92,16 @@ impl NanobotApp {
         session_key: &str,
         user_input: &str,
     ) -> Result<Option<String>, AppError> {
+        info!("app handle_cli_message session_key={session_key:?} user_input={user_input:?}");
         let mut session = self.session_manager.load_or_create(session_key)?;
         let (channel, chat_id) = split_session_key(session_key);
         self.agent_loop.set_message_target(channel, chat_id);
         let response =
             self.agent_loop
                 .run_once(self.provider.as_ref(), &mut session, user_input)?;
+        info!("app handle_cli_message agent_response={response:?}");
         for outbound in self.agent_loop.take_outbound_messages() {
+            info!("app handle_cli_message publishing outbound={outbound:?}");
             self.bus
                 .publish_outbound(outbound)
                 .map_err(|error| AgentError::Tool(error.to_string()))?;
@@ -111,6 +115,7 @@ impl NanobotApp {
         &mut self,
         inbound: InboundMessage,
     ) -> Result<Option<String>, AppError> {
+        info!("app handle_inbound_message inbound={inbound:?}");
         let session_key = inbound.session_key();
         let mut session = self.session_manager.load_or_create(&session_key)?;
         let mut metadata = inbound.metadata.clone();
@@ -123,7 +128,22 @@ impl NanobotApp {
         let response =
             self.agent_loop
                 .run_once(self.provider.as_ref(), &mut session, &inbound.content)?;
+        info!("app handle_inbound_message agent_response={response:?}");
+        if let Some(content) = response.clone() {
+            let outbound = OutboundMessage {
+                channel: inbound.channel.clone(),
+                chat_id: inbound.chat_id.clone(),
+                content,
+                reply_to: inbound.metadata.get("telegram_message_id").cloned(),
+                metadata: HashMap::new(),
+            };
+            info!("app handle_inbound_message publishing assistant outbound={outbound:?}");
+            self.bus
+                .publish_outbound(outbound)
+                .map_err(|error| AgentError::Tool(error.to_string()))?;
+        }
         for outbound in self.agent_loop.take_outbound_messages() {
+            info!("app handle_inbound_message publishing outbound={outbound:?}");
             self.bus
                 .publish_outbound(outbound)
                 .map_err(|error| AgentError::Tool(error.to_string()))?;
@@ -136,9 +156,11 @@ impl NanobotApp {
     pub fn process_inbound_once(&mut self) -> Result<usize, AppError> {
         let mut processed = 0;
         while let Some(inbound) = self.bus.try_consume_inbound() {
+            info!("app process_inbound_once dispatching inbound={inbound:?}");
             let _ = self.handle_inbound_message(inbound)?;
             processed += 1;
         }
+        info!("app process_inbound_once processed={processed}");
         Ok(processed)
     }
 
@@ -152,10 +174,14 @@ impl NanobotApp {
 
     pub fn dispatch_outbound_once(&mut self) -> Result<Vec<DispatchRecord>, AppError> {
         let outbound = self.take_outbound_messages();
+        info!("app dispatch_outbound_once outbound_batch={outbound:?}");
         let mut records = Vec::new();
         for msg in outbound {
             let rendered = self.render_outbound(&msg);
             let delivery = self.deliver_outbound(&msg);
+            info!(
+                "app dispatch_outbound_once delivered msg={msg:?} rendered={rendered:?} delivery={delivery:?}"
+            );
             records.push(DispatchRecord {
                 channel: msg.channel,
                 chat_id: msg.chat_id,

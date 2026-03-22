@@ -10,7 +10,7 @@ pub use http::{CurlExecutor, HttpExecutor, HttpRequest, ReqwestExecutor};
 pub use providers::{
     DemoToolCallingProvider, LlmProvider, OpenAiCompatibleProvider, StaticProvider,
 };
-pub use types::{ChatMessage, ChatRequest, LlmResponse, ToolCallRequest};
+pub use types::{ChatMessage, ChatRequest, LlmResponse, ToolCallMessage, ToolCallRequest};
 
 #[cfg(test)]
 mod tests;

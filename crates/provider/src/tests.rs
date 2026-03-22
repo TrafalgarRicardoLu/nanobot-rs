@@ -6,7 +6,7 @@ use std::sync::{Mutex, Once, OnceLock};
 use super::{
     ChatMessage, ChatRequest, DemoToolCallingProvider, HttpExecutor, HttpRequest, LlmProvider,
     OpenAiCompatibleProvider, ProviderError, ProviderKind, ProviderSelection, ReqwestExecutor,
-    StaticProvider, build_provider_from_config,
+    StaticProvider, ToolCallMessage, build_provider_from_config,
 };
 
 #[derive(Debug, Default)]
@@ -129,7 +129,9 @@ fn openai_compatible_provider_builds_real_http_request() {
         .chat(ChatRequest {
             messages: vec![ChatMessage {
                 role: "user".to_string(),
-                content: "Hi".to_string(),
+                content: Some("Hi".to_string()),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             }],
             tools: vec!["filesystem".to_string()],
             model: None,
@@ -175,7 +177,9 @@ fn openai_compatible_provider_parses_tool_calls() {
         .chat(ChatRequest {
             messages: vec![ChatMessage {
                 role: "user".to_string(),
-                content: "Hi".to_string(),
+                content: Some("Hi".to_string()),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             }],
             tools: vec!["message".to_string()],
             model: None,
@@ -205,7 +209,9 @@ fn openai_compatible_provider_logs_full_request_and_response() {
             .chat(ChatRequest {
                 messages: vec![ChatMessage {
                     role: "user".to_string(),
-                    content: "Hi".to_string(),
+                    content: Some("Hi".to_string()),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
                 }],
                 tools: vec!["filesystem".to_string()],
                 model: None,
@@ -230,6 +236,54 @@ fn openai_compatible_provider_logs_full_request_and_response() {
             "raw response body should be logged"
         );
     });
+}
+
+#[test]
+fn openai_compatible_provider_serializes_tool_call_id_and_tool_calls() {
+    let executor = RecordingExecutor::with_response(
+        r#"{"choices":[{"message":{"content":"hello"},"finish_reason":"stop"}]}"#,
+    );
+    let provider = OpenAiCompatibleProvider::new(
+        "sk-test",
+        "https://api.openai.com/v1",
+        "gpt-4o-mini",
+        executor.clone(),
+    );
+
+    let _ = provider
+        .chat(ChatRequest {
+            messages: vec![
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: Some("running tools".to_string()),
+                    tool_call_id: None,
+                    tool_calls: vec![ToolCallMessage {
+                        id: "call_1".to_string(),
+                        name: "shell".to_string(),
+                        arguments: serde_json::json!({"command": "echo hi"}),
+                    }],
+                },
+                ChatMessage {
+                    role: "tool".to_string(),
+                    content: Some("hi".to_string()),
+                    tool_call_id: Some("call_1".to_string()),
+                    tool_calls: Vec::new(),
+                },
+            ],
+            tools: vec!["shell".to_string()],
+            model: None,
+        })
+        .expect("provider call should succeed");
+
+    let request = executor
+        .last_request
+        .lock()
+        .expect("lock")
+        .clone()
+        .expect("request should be recorded");
+    assert!(request.body.contains("\"tool_call_id\":\"call_1\""));
+    assert!(request.body.contains("\"tool_calls\""));
+    assert!(request.body.contains("\"id\":\"call_1\""));
 }
 
 #[test]
@@ -304,13 +358,42 @@ fn curl_executor_executes_http_requests() {
 }
 
 #[test]
+fn reqwest_executor_surfaces_detailed_transport_errors() {
+    let executor = ReqwestExecutor;
+    let error = executor
+        .execute(&HttpRequest {
+            method: "POST".to_string(),
+            url: "https://127.0.0.1:1/chat/completions".to_string(),
+            headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+            body: "{}".to_string(),
+        })
+        .expect_err("request should fail");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("request execution failed"),
+        "top-level request failure should remain visible"
+    );
+    assert!(
+        message.contains("error sending request") || message.contains("tcp connect error"),
+        "transport detail should be preserved, got: {message}"
+    );
+    assert!(
+        message.contains("debug="),
+        "debug context should be included, got: {message}"
+    );
+}
+
+#[test]
 fn demo_tool_calling_provider_emits_tool_calls() {
     let provider = DemoToolCallingProvider;
     let response = provider
         .chat(ChatRequest {
             messages: vec![ChatMessage {
                 role: "user".to_string(),
-                content: "please write a file".to_string(),
+                content: Some("please write a file".to_string()),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             }],
             tools: vec!["filesystem".to_string()],
             model: None,

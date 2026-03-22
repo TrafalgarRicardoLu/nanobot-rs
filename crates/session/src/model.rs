@@ -1,20 +1,29 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::util::epoch_string;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredMessage {
     pub role: String,
-    pub content: String,
+    #[serde(default)]
+    pub content: Option<String>,
     pub timestamp: String,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub tool_call_id: Option<String>,
     #[serde(default)]
-    pub tool_calls: Vec<String>,
+    pub tool_calls: Vec<StoredToolCall>,
     #[serde(default)]
     pub metadata: HashMap<String, String>,
 }
@@ -23,7 +32,7 @@ impl StoredMessage {
     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: role.into(),
-            content: content.into(),
+            content: Some(content.into()),
             timestamp: epoch_string(),
             name: None,
             tool_call_id: None,

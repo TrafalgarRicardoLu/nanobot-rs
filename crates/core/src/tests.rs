@@ -81,10 +81,13 @@ impl LlmProvider for ToolCallingProvider {
             });
         }
 
-        let saw_tool_result = request
-            .messages
-            .iter()
-            .any(|message| message.content.contains("loop-tool"));
+        let saw_tool_result = request.messages.iter().any(|message| {
+            message
+                .content
+                .clone()
+                .unwrap_or_default()
+                .contains("loop-tool")
+        });
         Ok(LlmResponse {
             content: Some(if saw_tool_result {
                 "final: tool used".to_string()
@@ -113,10 +116,13 @@ fn agent_loop_executes_tool_calls_before_final_response() {
 
     assert_eq!(response.as_deref(), Some("final: tool used"));
     assert!(
-        session
-            .messages
-            .iter()
-            .any(|message| message.content.contains("loop-tool")),
+        session.messages.iter().any(|message| {
+            message
+                .content
+                .clone()
+                .unwrap_or_default()
+                .contains("loop-tool")
+        }),
         "stub should fail until tool call results are stored"
     );
 }
@@ -212,7 +218,10 @@ fn runtime_v2_merges_consecutive_user_messages() {
         .expect("runtime should succeed");
 
     assert_eq!(report.status, AgentRunStatus::Completed);
-    assert_eq!(session.messages[0].content, "first line\nsecond line");
+    assert_eq!(
+        session.messages[0].content.as_deref(),
+        Some("first line\nsecond line")
+    );
     assert_eq!(session.messages.len(), 2);
 }
 
@@ -292,10 +301,13 @@ impl LlmProvider for SubagentCallingProvider {
             });
         }
 
-        let saw_subagent_result = request
-            .messages
-            .iter()
-            .any(|message| message.content.contains("researcher =>"));
+        let saw_subagent_result = request.messages.iter().any(|message| {
+            message
+                .content
+                .clone()
+                .unwrap_or_default()
+                .contains("research: summarize issue")
+        });
         Ok(LlmResponse {
             content: Some(if saw_subagent_result {
                 "subagent integrated".to_string()
@@ -329,8 +341,13 @@ fn runtime_v2_executes_registered_subagent_via_spawn_tool() {
     assert!(session.messages.iter().any(|message| {
         message
             .content
-            .contains("researcher => research: summarize issue")
+            .clone()
+            .unwrap_or_default()
+            .contains("research: summarize issue")
     }));
+    assert!(session.messages.iter().any(
+        |message| message.role == "tool" && message.tool_call_id.as_deref() == Some("spawn-1")
+    ));
     assert!(report.events.iter().any(|event| matches!(
         event,
         AgentEvent::SubagentStarted { name, task }
@@ -389,12 +406,14 @@ fn runtime_v2_loads_skills_from_directory_and_activates_them() {
             .any(|event| matches!(event, AgentEvent::SkillActivated { name } if name == "planner"))
     );
     let requests = provider.requests.lock().expect("lock");
-    assert!(
-        requests[0]
-            .messages
-            .iter()
-            .any(|message| message.role == "system" && message.content.contains("Plan carefully"))
-    );
+    assert!(requests[0].messages.iter().any(|message| {
+        message.role == "system"
+            && message
+                .content
+                .clone()
+                .unwrap_or_default()
+                .contains("Plan carefully")
+    }));
 }
 
 #[test]
@@ -409,12 +428,14 @@ fn runtime_v2_ignores_unknown_skill_mentions() {
 
     assert!(report.skill_activations.is_empty());
     let requests = provider.requests.lock().expect("lock");
-    assert!(
-        requests[0]
-            .messages
-            .iter()
-            .all(|message| !(message.role == "system" && message.content.contains("missing")))
-    );
+    assert!(requests[0].messages.iter().all(|message| {
+        !(message.role == "system"
+            && message
+                .content
+                .clone()
+                .unwrap_or_default()
+                .contains("missing"))
+    }));
 }
 
 #[test]
@@ -452,10 +473,11 @@ fn runtime_v2_interrupts_before_tool_execution_and_can_resume() {
             .any(|event| matches!(event, AgentEvent::RunInterrupted { step } if *step == 1))
     );
     assert!(
-        session
-            .messages
-            .iter()
-            .all(|message| !message.content.contains("loop-tool")),
+        session.messages.iter().all(|message| !message
+            .content
+            .clone()
+            .unwrap_or_default()
+            .contains("loop-tool")),
         "tool should not have run before interruption"
     );
 
@@ -466,12 +488,44 @@ fn runtime_v2_interrupts_before_tool_execution_and_can_resume() {
 
     assert_eq!(resumed.status, AgentRunStatus::Completed);
     assert_eq!(resumed.response.as_deref(), Some("final: tool used"));
-    assert!(
-        session
-            .messages
-            .iter()
-            .any(|message| message.content.contains("loop-tool"))
-    );
+    assert!(session.messages.iter().any(|message| {
+        message
+            .content
+            .clone()
+            .unwrap_or_default()
+            .contains("loop-tool")
+    }));
+}
+
+#[test]
+fn runtime_v2_stores_assistant_tool_calls_and_tool_call_ids() {
+    let provider = ToolCallingProvider::default();
+    let mut session = Session::new("cli:tool-schema");
+    let mut loop_ = AgentLoop::new("offline/tool-calling");
+
+    let report = loop_
+        .run_turn(&provider, &mut session, "run a tool")
+        .expect("runtime should succeed");
+
+    assert_eq!(report.status, AgentRunStatus::Completed);
+    assert!(session.messages.iter().any(|message| {
+        message.role == "assistant"
+            && message.tool_calls
+                == vec![nanobot_session::StoredToolCall {
+                    id: "tool-1".to_string(),
+                    name: "shell".to_string(),
+                    arguments: serde_json::json!({"command": "echo loop-tool"}),
+                }]
+    }));
+    assert!(session.messages.iter().any(|message| {
+        message.role == "tool"
+            && message.tool_call_id.as_deref() == Some("tool-1")
+            && message
+                .content
+                .clone()
+                .unwrap_or_default()
+                .contains("loop-tool")
+    }));
 }
 
 #[test]

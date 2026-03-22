@@ -33,7 +33,7 @@ impl<E> OpenAiCompatibleProvider<E> {
         let url = format!("{}/chat/completions", self.api_base.trim_end_matches('/'));
         let body = serde_json::json!({
             "model": self.model,
-            "messages": request.messages,
+            "messages": request.messages.iter().map(serialize_chat_message).collect::<Vec<_>>(),
             "tools": request.tools.iter().map(|name| {
                 serde_json::json!({
                     "type": "function",
@@ -133,4 +133,39 @@ impl<E: HttpExecutor> LlmProvider for OpenAiCompatibleProvider<E> {
     fn default_model(&self) -> &str {
         &self.model
     }
+}
+
+fn serialize_chat_message(message: &crate::ChatMessage) -> Value {
+    let mut value = serde_json::json!({
+        "role": message.role,
+    });
+
+    if let Some(content) = &message.content {
+        value["content"] = Value::String(content.clone());
+    }
+
+    if let Some(tool_call_id) = &message.tool_call_id {
+        value["tool_call_id"] = Value::String(tool_call_id.clone());
+    }
+
+    if !message.tool_calls.is_empty() {
+        value["tool_calls"] = Value::Array(
+            message
+                .tool_calls
+                .iter()
+                .map(|call| {
+                    serde_json::json!({
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": call.arguments.to_string(),
+                        }
+                    })
+                })
+                .collect(),
+        );
+    }
+
+    value
 }

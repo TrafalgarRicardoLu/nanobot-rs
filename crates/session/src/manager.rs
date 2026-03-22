@@ -82,12 +82,12 @@ impl SessionManager {
             .count();
         let tools = unconsolidated
             .iter()
-            .flat_map(|message| message.tool_calls.iter().cloned())
+            .flat_map(|message| message.tool_calls.iter().map(|call| call.name.clone()))
             .collect::<Vec<_>>();
         let recent_topics = unconsolidated
             .iter()
             .filter(|message| message.role == "user")
-            .map(|message| format!("- {}", message.content))
+            .map(|message| format!("- {}", message.content.clone().unwrap_or_default()))
             .collect::<Vec<_>>();
 
         let memory = format!(

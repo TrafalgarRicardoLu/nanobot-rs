@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+log.workspace = true
 nanobot-bus = { path = "../bus" }
 nanobot-channels = { path = "../channels" }
 nanobot-config = { path = "../config" }
