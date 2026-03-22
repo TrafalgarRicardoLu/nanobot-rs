@@ -633,6 +633,7 @@ name = "nanobot-app"
 version = "0.1.0"
 dependencies = [
  "nanobot-bus",
+ "nanobot-channel-telegram",
  "nanobot-channels",
  "nanobot-config",
  "nanobot-core",
@@ -651,6 +652,20 @@ name = "nanobot-bus"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "tokio",
+]
+
+[[package]]
+name = "nanobot-channel-telegram"
+version = "0.1.0"
+dependencies = [
+ "nanobot-bus",
+ "nanobot-channels",
+ "nanobot-config",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
  "tokio",
 ]
 

@@ -18,7 +18,10 @@ fn parses_generic_channel_list() {
             {
                 "kind": "stub",
                 "enabled": true,
-                "allowFrom": ["user-1"]
+                "allowFrom": ["user-1"],
+                "settings": {
+                    "token": "demo"
+                }
             }
         ]
     }"#;
@@ -32,6 +35,7 @@ fn parses_generic_channel_list() {
     assert_eq!(config.channels[0].kind, "stub");
     assert!(config.channels[0].enabled);
     assert_eq!(config.channels[0].allow_from, vec!["user-1".to_string()]);
+    assert_eq!(config.channels[0].settings["token"], "demo");
 }
 
 #[test]
@@ -65,7 +69,8 @@ fn rejects_channel_entries_missing_kind() {
         ]
     }"#;
 
-    let error = Config::from_json_str(input).expect_err("config should reject missing channel kind");
+    let error =
+        Config::from_json_str(input).expect_err("config should reject missing channel kind");
 
     assert!(
         error.to_string().contains("kind"),
@@ -77,7 +82,26 @@ fn rejects_channel_entries_missing_kind() {
 fn defaults_produce_empty_channel_list() {
     let config = Config::from_json_str("{}").expect("config should parse");
 
-    assert!(config.channels.is_empty(), "channels should default to an empty list");
+    assert!(
+        config.channels.is_empty(),
+        "channels should default to an empty list"
+    );
+}
+
+#[test]
+fn channel_settings_default_to_empty_object() {
+    let input = r#"{
+        "channels": [
+            {
+                "kind": "telegram",
+                "enabled": true
+            }
+        ]
+    }"#;
+
+    let config = Config::from_json_str(input).expect("config should parse");
+
+    assert_eq!(config.channels[0].settings, serde_json::json!({}));
 }
 
 #[test]

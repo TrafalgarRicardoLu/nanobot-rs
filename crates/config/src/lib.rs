@@ -1,7 +1,8 @@
 use serde::{
-    de::{Error as DeError, Deserializer},
     Deserialize, Serialize,
+    de::{Deserializer, Error as DeError},
 };
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -71,6 +72,12 @@ pub struct ChannelConfig {
     pub enabled: bool,
     #[serde(default)]
     pub allow_from: Vec<String>,
+    #[serde(default = "default_channel_settings")]
+    pub settings: Value,
+}
+
+fn default_channel_settings() -> Value {
+    Value::Object(Map::new())
 }
 
 fn deserialize_channel_kind<'de, D>(deserializer: D) -> Result<String, D::Error>

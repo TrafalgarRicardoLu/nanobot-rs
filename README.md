@@ -79,3 +79,33 @@ cargo run -p nanobot-cli -- serve
 - This repository is intentionally Rust-only. The original Python package, Python tests, and packaging files were not carried over.
 - The current implementation is the extracted Rust rewrite as it exists today, not a full feature-parity port of the original nanobot project.
 - Concrete inbound and outbound channels are no longer bundled in this workspace. Integrators are expected to provide channel implementations against the shared runtime contract.
+- A built-in Telegram Bot channel is available via long polling for private text chats.
+
+## Telegram Channel
+
+Configure a Telegram Bot channel in `.nanobot-rs/config.json`:
+
+```json
+{
+  "channels": [
+    {
+      "kind": "telegram",
+      "enabled": true,
+      "allowFrom": ["123456789"],
+      "settings": {
+        "botToken": "123456:telegram-bot-token",
+        "apiBase": "https://api.telegram.org",
+        "pollTimeoutSeconds": 20,
+        "dropPendingUpdatesOnStart": true
+      }
+    }
+  ]
+}
+```
+
+Current scope:
+
+- Long polling only
+- Private chats only
+- Text message receive/send only
+- `allowFrom` must contain Telegram numeric `user_id` values

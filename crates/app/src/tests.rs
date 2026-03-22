@@ -184,6 +184,30 @@ fn from_config_uses_agent_default_provider_model() {
 }
 
 #[test]
+fn from_config_builds_builtin_telegram_channel() {
+    let config = Config::from_json_str(
+        r#"{
+            "channels": [
+                {
+                    "kind": "telegram",
+                    "enabled": true,
+                    "allowFrom": ["42"],
+                    "settings": {
+                        "botToken": "123:test"
+                    }
+                }
+            ]
+        }"#,
+    )
+    .expect("config should parse");
+
+    let app = NanobotApp::from_config(config, temp_dir("telegram-channel"))
+        .expect("app should build with telegram channel");
+
+    assert_eq!(app.enabled_channel_names(), vec!["telegram"]);
+}
+
+#[test]
 fn handles_cli_messages_and_persists_session() {
     let dir = temp_dir("session");
     let mut app = NanobotApp::new(
@@ -249,16 +273,18 @@ fn app_run_triggers_memory_consolidation_after_threshold() {
             .expect("message should be handled");
     }
 
-    assert!(dir
-        .join("memories")
-        .join("cli_local")
-        .join("MEMORY.md")
-        .exists());
-    assert!(dir
-        .join("memories")
-        .join("cli_local")
-        .join("HISTORY.md")
-        .exists());
+    assert!(
+        dir.join("memories")
+            .join("cli_local")
+            .join("MEMORY.md")
+            .exists()
+    );
+    assert!(
+        dir.join("memories")
+            .join("cli_local")
+            .join("HISTORY.md")
+            .exists()
+    );
 }
 
 #[test]
@@ -298,9 +324,11 @@ fn background_pump_emits_heartbeat_and_cron_records() {
 
     assert!(records.iter().any(|record| record.chat_id == "heartbeat"));
     assert!(records.iter().any(|record| record.chat_id == "cron:digest"));
-    assert!(records
-        .iter()
-        .any(|record| record.rendered.contains("payload=send-digest")));
+    assert!(
+        records
+            .iter()
+            .any(|record| record.rendered.contains("payload=send-digest"))
+    );
 }
 
 #[test]
@@ -319,12 +347,16 @@ fn background_loop_collects_records_across_ticks() {
         .run_background_loop(0, 10, 4)
         .expect("background loop should work");
 
-    assert!(records
-        .iter()
-        .any(|record| record.rendered.contains("heartbeat")));
-    assert!(records
-        .iter()
-        .any(|record| record.rendered.contains("payload=send-digest")));
+    assert!(
+        records
+            .iter()
+            .any(|record| record.rendered.contains("heartbeat"))
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record.rendered.contains("payload=send-digest"))
+    );
 }
 
 #[test]
@@ -345,9 +377,11 @@ fn background_worker_runs_ticks_in_thread() {
 
     assert!(records.iter().any(|record| record.chat_id == "heartbeat"));
     assert!(records.iter().any(|record| record.chat_id == "cron:digest"));
-    assert!(records
-        .iter()
-        .any(|record| record.rendered.contains("payload=send-digest")));
+    assert!(
+        records
+            .iter()
+            .any(|record| record.rendered.contains("payload=send-digest"))
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::JoinHandle;
 
@@ -47,6 +47,10 @@ pub fn is_allowed(allow_from: &[String], sender_id: &str) -> bool {
 pub enum ChannelError {
     #[error("unsupported operation")]
     UnsupportedOperation,
+    #[error("invalid message: {0}")]
+    InvalidMessage(String),
+    #[error("transport error: {0}")]
+    Transport(String),
 }
 
 pub struct ChannelRuntimeHandle {

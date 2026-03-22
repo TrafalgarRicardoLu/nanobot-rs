@@ -2,6 +2,7 @@
 members = [
     "crates/app",
     "crates/bus",
+    "crates/channel-telegram",
     "crates/channels",
     "crates/cli",
     "crates/config",
@@ -23,7 +24,7 @@ clap = { version = "3.2.4", features = ["derive"] }
 futures-util = "0.3.31"
 log = "0.4.28"
 pyo3 = { version = "0.23.4", features = ["auto-initialize"] }
-reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.12"

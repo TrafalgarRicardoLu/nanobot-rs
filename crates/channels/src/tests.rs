@@ -1,4 +1,4 @@
-use super::{is_allowed, Channel, ChannelError, MessageBus, OutboundMessage};
+use super::{Channel, ChannelError, MessageBus, OutboundMessage, is_allowed};
 
 struct StubChannel {
     name: &'static str,
@@ -50,9 +50,11 @@ fn spawn_inbound_runtime_defaults_to_none() {
     };
     let bus = MessageBus::new();
 
-    assert!(channel
-        .spawn_inbound_runtime(bus.inbound_publisher())
-        .is_none());
+    assert!(
+        channel
+            .spawn_inbound_runtime(bus.inbound_publisher())
+            .is_none()
+    );
 }
 
 #[test]
