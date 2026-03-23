@@ -312,7 +312,7 @@ fn dispatcher_skips_unregistered_channels_as_unsupported() {
 }
 
 #[test]
-fn background_pump_emits_heartbeat_and_cron_records() {
+fn background_pump_emits_heartbeat_and_queues_cron_inbound() {
     let dir = temp_dir("background");
     let mut app = NanobotApp::new(
         Config::default(),
@@ -320,7 +320,7 @@ fn background_pump_emits_heartbeat_and_cron_records() {
         &dir,
     )
     .expect("app should build");
-    app.schedule_cron_job("digest", "send-digest", 5, 5)
+    app.schedule_cron_job("digest", "cron:digest:session-1", "send-digest", 5, 5)
         .expect("cron job should register");
 
     let records = app
@@ -328,11 +328,22 @@ fn background_pump_emits_heartbeat_and_cron_records() {
         .expect("background pump should work");
 
     assert!(records.iter().any(|record| record.chat_id == "heartbeat"));
-    assert!(records.iter().any(|record| record.chat_id == "cron:digest"));
     assert!(
         records
             .iter()
-            .any(|record| record.rendered.contains("payload=send-digest"))
+            .any(|record| record.rendered.contains("queued cron inbound"))
+    );
+    let inbound = app
+        .bus
+        .try_consume_inbound()
+        .expect("cron inbound should be queued");
+    assert_eq!(inbound.channel, "system");
+    assert_eq!(inbound.sender_id, "cron");
+    assert_eq!(inbound.chat_id, "digest");
+    assert_eq!(inbound.content, "send-digest");
+    assert_eq!(
+        inbound.session_key_override.as_deref(),
+        Some("cron:digest:session-1")
     );
 }
 
@@ -345,7 +356,7 @@ fn background_loop_collects_records_across_ticks() {
         &dir,
     )
     .expect("app should build");
-    app.schedule_cron_job("digest", "send-digest", 10, 10)
+    app.schedule_cron_job("digest", "cron:digest:session-1", "send-digest", 10, 10)
         .expect("cron job should register");
 
     let records = app
@@ -360,7 +371,7 @@ fn background_loop_collects_records_across_ticks() {
     assert!(
         records
             .iter()
-            .any(|record| record.rendered.contains("payload=send-digest"))
+            .any(|record| record.rendered.contains("heartbeat"))
     );
 }
 
@@ -373,7 +384,7 @@ fn background_worker_runs_ticks_in_thread() {
         &dir,
     )
     .expect("app should build");
-    app.schedule_cron_job("digest", "send-digest", 10, 10)
+    app.schedule_cron_job("digest", "cron:digest:session-1", "send-digest", 10, 10)
         .expect("cron job should register");
 
     let shared = app.into_shared();
@@ -381,11 +392,40 @@ fn background_worker_runs_ticks_in_thread() {
     let records = handle.join().expect("worker thread should join");
 
     assert!(records.iter().any(|record| record.chat_id == "heartbeat"));
-    assert!(records.iter().any(|record| record.chat_id == "cron:digest"));
-    assert!(
-        records
-            .iter()
-            .any(|record| record.rendered.contains("payload=send-digest"))
+    assert!(records.iter().any(|record| {
+        record.rendered.contains("queued cron inbound") && record.chat_id == "cron:digest"
+    }));
+}
+
+#[test]
+fn cron_inbound_uses_its_own_session_override_when_processed() {
+    let dir = temp_dir("cron-session");
+    let mut app = NanobotApp::new(
+        Config::default(),
+        Box::new(StaticProvider::new("offline/test", "processed inbound")),
+        &dir,
+    )
+    .expect("app should build");
+    app.schedule_cron_job("digest", "cron:digest:session-42", "send-digest", 5, 5)
+        .expect("cron job should register");
+
+    let _ = app
+        .pump_background_once(5)
+        .expect("background pump should work");
+    let processed = app
+        .process_inbound_once()
+        .expect("cron inbound should process");
+
+    assert_eq!(processed, 1);
+    let session = app
+        .session_manager
+        .load("cron:digest:session-42")
+        .expect("session should load")
+        .expect("session should exist");
+    assert_eq!(session.messages[0].content.as_deref(), Some("send-digest"));
+    assert_eq!(
+        session.messages[1].content.as_deref(),
+        Some("processed inbound: send-digest")
     );
 }
 
@@ -495,11 +535,17 @@ fn schedule_cron_job_returns_duplicate_name_error() {
     )
     .expect("app should build");
 
-    app.schedule_cron_job("digest", "send-digest", 5, 5)
+    app.schedule_cron_job("digest", "cron:digest:session-1", "send-digest", 5, 5)
         .expect("first cron job should register");
 
     assert!(matches!(
-        app.schedule_cron_job("digest", "send-digest-again", 10, 10),
+        app.schedule_cron_job(
+            "digest",
+            "cron:digest:session-2",
+            "send-digest-again",
+            10,
+            10
+        ),
         Err(crate::AppError::Cron(CronError::DuplicateJobName(name))) if name == "digest"
     ));
 }

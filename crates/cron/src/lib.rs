@@ -6,6 +6,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CronJob {
     pub name: String,
+    pub session_id: String,
     pub payload: String,
     pub interval_ticks: u64,
     pub next_tick: u64,
@@ -29,6 +30,7 @@ impl CronService {
     pub fn add_job(
         &mut self,
         name: impl Into<String>,
+        session_id: impl Into<String>,
         payload: impl Into<String>,
         interval_ticks: u64,
         next_tick: u64,
@@ -44,6 +46,7 @@ impl CronService {
             name.clone(),
             CronJob {
                 name,
+                session_id: session_id.into(),
                 payload: payload.into(),
                 interval_ticks: interval_ticks.max(1),
                 next_tick,
@@ -62,6 +65,7 @@ impl CronService {
             if now_tick >= job.next_tick {
                 due.push(CronJob {
                     name: job.name.clone(),
+                    session_id: job.session_id.clone(),
                     payload: job.payload.clone(),
                     interval_ticks: job.interval_ticks,
                     next_tick: job.next_tick,

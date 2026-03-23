@@ -193,12 +193,13 @@ impl NanobotApp {
     pub fn schedule_cron_job(
         &mut self,
         name: impl Into<String>,
+        session_id: impl Into<String>,
         payload: impl Into<String>,
         interval_ticks: u64,
         next_tick: u64,
     ) -> Result<(), AppError> {
         self.cron
-            .add_job(name, payload, interval_ticks, next_tick)
+            .add_job(name, session_id, payload, interval_ticks, next_tick)
             .map_err(AppError::from)
     }
 
@@ -214,10 +215,28 @@ impl NanobotApp {
             });
         }
         for job in self.cron.tick(now_tick) {
+            self.bus
+                .publish_inbound(InboundMessage {
+                    channel: "system".to_string(),
+                    sender_id: "cron".to_string(),
+                    chat_id: job.name.clone(),
+                    content: job.payload.clone(),
+                    media: Vec::new(),
+                    metadata: HashMap::from([
+                        ("source".to_string(), "cron".to_string()),
+                        ("job_name".to_string(), job.name.clone()),
+                        ("scheduled_tick".to_string(), now_tick.to_string()),
+                    ]),
+                    session_key_override: Some(job.session_id.clone()),
+                })
+                .map_err(|error| AgentError::Tool(error.to_string()))?;
             records.push(DispatchRecord {
                 channel: "system".to_string(),
                 chat_id: format!("cron:{}", job.name),
-                rendered: format!("cron job due: {} payload={}", job.name, job.payload),
+                rendered: format!(
+                    "queued cron inbound: {} session={} payload={}",
+                    job.name, job.session_id, job.payload
+                ),
                 delivery: "local".to_string(),
             });
         }
