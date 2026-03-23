@@ -327,12 +327,37 @@ fn background_pump_emits_heartbeat_and_queues_cron_inbound() {
         .pump_background_once(30)
         .expect("background pump should work");
 
-    assert!(records.iter().any(|record| record.chat_id == "heartbeat"));
+    assert!(
+        records
+            .iter()
+            .any(|record| record.rendered.contains("queued heartbeat inbound"))
+    );
     assert!(
         records
             .iter()
             .any(|record| record.rendered.contains("queued cron inbound"))
     );
+    let heartbeat = app
+        .bus
+        .try_consume_inbound()
+        .expect("heartbeat inbound should be queued");
+    assert_eq!(heartbeat.channel, "system");
+    assert_eq!(heartbeat.sender_id, "heartbeat");
+    assert_eq!(heartbeat.chat_id, "heartbeat");
+    assert_eq!(heartbeat.content, "heartbeat tick=30");
+    assert_eq!(
+        heartbeat.metadata.get("source").map(String::as_str),
+        Some("heartbeat")
+    );
+    assert_eq!(
+        heartbeat.metadata.get("scheduled_tick").map(String::as_str),
+        Some("30")
+    );
+    assert_eq!(
+        heartbeat.session_key_override.as_deref(),
+        Some("system:heartbeat:30")
+    );
+
     let inbound = app
         .bus
         .try_consume_inbound()
@@ -391,7 +416,9 @@ fn background_worker_runs_ticks_in_thread() {
     let handle = NanobotApp::spawn_background_worker(shared, 0, 10, 0, 4);
     let records = handle.join().expect("worker thread should join");
 
-    assert!(records.iter().any(|record| record.chat_id == "heartbeat"));
+    assert!(records
+        .iter()
+        .any(|record| record.rendered.contains("queued heartbeat inbound")));
     assert!(records.iter().any(|record| {
         record.rendered.contains("queued cron inbound") && record.chat_id == "cron:digest"
     }));
@@ -426,6 +453,36 @@ fn cron_inbound_uses_its_own_session_override_when_processed() {
     assert_eq!(
         session.messages[1].content.as_deref(),
         Some("processed inbound: send-digest")
+    );
+}
+
+#[test]
+fn heartbeat_inbound_uses_its_own_session_override_when_processed() {
+    let dir = temp_dir("heartbeat-session");
+    let mut app = NanobotApp::new(
+        Config::default(),
+        Box::new(StaticProvider::new("offline/test", "processed inbound")),
+        &dir,
+    )
+    .expect("app should build");
+
+    let _ = app
+        .pump_background_once(30)
+        .expect("background pump should work");
+    let processed = app
+        .process_inbound_once()
+        .expect("heartbeat inbound should process");
+
+    assert_eq!(processed, 1);
+    let session = app
+        .session_manager
+        .load("system:heartbeat:30")
+        .expect("session should load")
+        .expect("session should exist");
+    assert_eq!(session.messages[0].content.as_deref(), Some("heartbeat tick=30"));
+    assert_eq!(
+        session.messages[1].content.as_deref(),
+        Some("processed inbound: heartbeat tick=30")
     );
 }
 

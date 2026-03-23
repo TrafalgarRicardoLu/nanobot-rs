@@ -26,6 +26,61 @@ pub struct NanobotApp {
 }
 
 impl NanobotApp {
+    fn heartbeat_inbound(now_tick: u64) -> InboundMessage {
+        InboundMessage {
+            channel: "system".to_string(),
+            sender_id: "heartbeat".to_string(),
+            chat_id: "heartbeat".to_string(),
+            content: format!("heartbeat tick={now_tick}"),
+            media: Vec::new(),
+            metadata: HashMap::from([
+                ("source".to_string(), "heartbeat".to_string()),
+                ("scheduled_tick".to_string(), now_tick.to_string()),
+            ]),
+            session_key_override: Some(format!("system:heartbeat:{now_tick}")),
+        }
+    }
+
+    fn background_dispatch_record(msg: &InboundMessage) -> DispatchRecord {
+        let source = msg
+            .metadata
+            .get("source")
+            .map(String::as_str)
+            .unwrap_or("background");
+        let rendered = if source == "cron" {
+            let job_name = msg
+                .metadata
+                .get("job_name")
+                .map(String::as_str)
+                .unwrap_or(msg.chat_id.as_str());
+            let session = msg.session_key_override.as_deref().unwrap_or_default();
+            format!(
+                "queued cron inbound: {} session={} payload={}",
+                job_name, session, msg.content
+            )
+        } else {
+            format!("queued {source} inbound: {}", msg.content)
+        };
+
+        let chat_id = if source == "cron" {
+            let job_name = msg
+                .metadata
+                .get("job_name")
+                .map(String::as_str)
+                .unwrap_or(msg.chat_id.as_str());
+            format!("cron:{job_name}")
+        } else {
+            msg.chat_id.clone()
+        };
+
+        DispatchRecord {
+            channel: msg.channel.clone(),
+            chat_id,
+            rendered,
+            delivery: "local".to_string(),
+        }
+    }
+
     pub fn from_config(config: Config, workspace: impl Into<PathBuf>) -> Result<Self, AppError> {
         let provider = build_provider_from_config(&config);
         let channels = build_builtin_channels(&config)?;
@@ -205,40 +260,33 @@ impl NanobotApp {
 
     pub fn pump_background_once(&mut self, now_tick: u64) -> Result<Vec<DispatchRecord>, AppError> {
         let mut records = self.dispatch_outbound_once()?;
-        if self.heartbeat.is_due(now_tick) {
-            self.heartbeat.mark_sent(now_tick);
-            records.push(DispatchRecord {
+        let mut background_inbound = Vec::new();
+
+        if let Some(now_tick) = self.heartbeat.tick(now_tick) {
+            background_inbound.push(Self::heartbeat_inbound(now_tick));
+        }
+
+        for job in self.cron.tick(now_tick) {
+            background_inbound.push(InboundMessage {
                 channel: "system".to_string(),
-                chat_id: "heartbeat".to_string(),
-                rendered: format!("heartbeat tick={now_tick}"),
-                delivery: "local".to_string(),
+                sender_id: "cron".to_string(),
+                chat_id: job.name.clone(),
+                content: job.payload.clone(),
+                media: Vec::new(),
+                metadata: HashMap::from([
+                    ("source".to_string(), "cron".to_string()),
+                    ("job_name".to_string(), job.name.clone()),
+                    ("scheduled_tick".to_string(), now_tick.to_string()),
+                ]),
+                session_key_override: Some(job.session_id.clone()),
             });
         }
-        for job in self.cron.tick(now_tick) {
+
+        for inbound in background_inbound {
             self.bus
-                .publish_inbound(InboundMessage {
-                    channel: "system".to_string(),
-                    sender_id: "cron".to_string(),
-                    chat_id: job.name.clone(),
-                    content: job.payload.clone(),
-                    media: Vec::new(),
-                    metadata: HashMap::from([
-                        ("source".to_string(), "cron".to_string()),
-                        ("job_name".to_string(), job.name.clone()),
-                        ("scheduled_tick".to_string(), now_tick.to_string()),
-                    ]),
-                    session_key_override: Some(job.session_id.clone()),
-                })
+                .publish_inbound(inbound.clone())
                 .map_err(|error| AgentError::Tool(error.to_string()))?;
-            records.push(DispatchRecord {
-                channel: "system".to_string(),
-                chat_id: format!("cron:{}", job.name),
-                rendered: format!(
-                    "queued cron inbound: {} session={} payload={}",
-                    job.name, job.session_id, job.payload
-                ),
-                delivery: "local".to_string(),
-            });
+            records.push(Self::background_dispatch_record(&inbound));
         }
         Ok(records)
     }

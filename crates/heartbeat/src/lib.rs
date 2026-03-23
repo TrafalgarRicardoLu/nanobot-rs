@@ -19,6 +19,14 @@ impl HeartbeatService {
     pub fn mark_sent(&mut self, now_tick: u64) {
         self.last_tick = now_tick;
     }
+
+    pub fn tick(&mut self, now_tick: u64) -> Option<u64> {
+        if !self.is_due(now_tick) {
+            return None;
+        }
+        self.mark_sent(now_tick);
+        Some(now_tick)
+    }
 }
 
 #[cfg(test)]
