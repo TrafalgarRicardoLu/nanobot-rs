@@ -49,7 +49,6 @@ pub struct Session {
     pub created_at: String,
     pub updated_at: String,
     pub metadata: HashMap<String, String>,
-    pub last_consolidated: usize,
 }
 
 impl Session {
@@ -61,7 +60,6 @@ impl Session {
             created_at: now.clone(),
             updated_at: now,
             metadata: HashMap::new(),
-            last_consolidated: 0,
         }
     }
 
@@ -76,16 +74,24 @@ impl Session {
     }
 
     pub fn get_history(&self, max_messages: usize) -> Vec<StoredMessage> {
-        let unconsolidated = &self.messages[self.last_consolidated.min(self.messages.len())..];
-        let start = unconsolidated.len().saturating_sub(max_messages);
-        let mut sliced = unconsolidated[start..].to_vec();
+        let start = self.messages.len().saturating_sub(max_messages);
+        let mut sliced = self.messages[start..].to_vec();
+        let first_user = sliced.iter().position(|msg| msg.role == "user");
+        let leading_summary_count = sliced
+            .iter()
+            .take_while(|msg| {
+                msg.metadata.get("kind").map(String::as_str) == Some("compact_summary")
+            })
+            .count();
 
-        if let Some(index) = sliced.iter().position(|msg| msg.role == "user") {
-            sliced.drain(0..index);
-        } else {
-            sliced.clear();
+        match first_user {
+            Some(index) if index > leading_summary_count => {
+                sliced.drain(leading_summary_count..index);
+                sliced
+            }
+            Some(_) => sliced,
+            None if leading_summary_count > 0 => sliced[..leading_summary_count].to_vec(),
+            None => Vec::new(),
         }
-
-        sliced
     }
 }

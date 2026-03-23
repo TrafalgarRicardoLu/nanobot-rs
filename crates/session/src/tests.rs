@@ -45,20 +45,33 @@ fn saves_and_loads_jsonl_session_with_metadata_header() {
 }
 
 #[test]
-fn get_history_skips_leading_non_user_messages_after_consolidation() {
+fn get_history_preserves_compact_summary_before_latest_turn() {
     let mut session = Session::new("qq:user-1");
+    session.add_structured_message(StoredMessage {
+        role: "system".to_string(),
+        content: Some("summary of earlier context".to_string()),
+        timestamp: "0".to_string(),
+        name: None,
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+        metadata: HashMap::from([("kind".to_string(), "compact_summary".to_string())]),
+    });
     session.add_message("assistant", "orphan assistant");
     session.add_message("tool", "orphan tool");
     session.add_message("user", "hello");
     session.add_message("assistant", "hi");
-    session.last_consolidated = 1;
 
     let history = session.get_history(10);
 
-    assert_eq!(history.len(), 2);
-    assert_eq!(history[0].role, "user");
-    assert_eq!(history[0].content.as_deref(), Some("hello"));
-    assert_eq!(history[1].role, "assistant");
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[0].role, "system");
+    assert_eq!(
+        history[0].content.as_deref(),
+        Some("summary of earlier context")
+    );
+    assert_eq!(history[1].role, "user");
+    assert_eq!(history[1].content.as_deref(), Some("hello"));
+    assert_eq!(history[2].role, "assistant");
 }
 
 #[test]
@@ -102,15 +115,14 @@ fn saves_and_loads_structured_message_fields() {
 }
 
 #[test]
-fn consolidate_writes_memory_and_history_files() {
-    let dir = temp_dir("consolidate");
+fn save_and_load_round_trips_compact_summary_metadata() {
+    let dir = temp_dir("compact-summary");
     let manager = SessionManager::new(&dir).expect("manager should build");
     let mut session = Session::new("qq:user-9");
-    session.add_message("user", "track my todos");
     session.add_structured_message(StoredMessage {
-        role: "assistant".to_string(),
-        content: Some("used filesystem".to_string()),
-        timestamp: "2".to_string(),
+        role: "system".to_string(),
+        content: Some("summary: track todos and use filesystem".to_string()),
+        timestamp: "1".to_string(),
         name: None,
         tool_call_id: None,
         tool_calls: vec![StoredToolCall {
@@ -118,18 +130,21 @@ fn consolidate_writes_memory_and_history_files() {
             name: "filesystem".to_string(),
             arguments: serde_json::json!({}),
         }],
-        metadata: HashMap::new(),
+        metadata: HashMap::from([("kind".to_string(), "compact_summary".to_string())]),
     });
+    session.add_message("user", "what's left?");
 
-    manager
-        .consolidate(&mut session)
-        .expect("consolidation should work");
+    manager.save(&session).expect("save should work");
+    let loaded = manager
+        .load("qq:user-9")
+        .expect("load should work")
+        .expect("session should exist");
 
-    let memory = fs::read_to_string(manager.memory_dir("qq:user-9").join("MEMORY.md"))
-        .expect("memory file should exist");
-    let history = fs::read_to_string(manager.memory_dir("qq:user-9").join("HISTORY.md"))
-        .expect("history file should exist");
-    assert!(memory.contains("filesystem"));
-    assert!(history.contains("track my todos"));
-    assert_eq!(session.last_consolidated, session.messages.len());
+    assert_eq!(loaded.messages.len(), 2);
+    assert_eq!(loaded.messages[0].role, "system");
+    assert_eq!(
+        loaded.messages[0].metadata.get("kind").map(String::as_str),
+        Some("compact_summary")
+    );
+    assert_eq!(loaded.messages[1].content.as_deref(), Some("what's left?"));
 }

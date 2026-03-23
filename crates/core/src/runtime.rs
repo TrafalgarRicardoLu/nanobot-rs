@@ -109,6 +109,7 @@ pub(crate) struct PendingRunState {
 pub struct AgentLoop {
     pub(crate) model: String,
     pub(crate) max_history: usize,
+    pub(crate) compact_keep_recent: usize,
     pub(crate) tools: ToolRegistry,
     pub(crate) run_config: AgentRunConfig,
     pub(crate) cancel_requested: bool,

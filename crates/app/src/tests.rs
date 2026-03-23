@@ -258,8 +258,8 @@ fn demo_tool_calling_provider_can_write_files_via_cli_flow() {
 }
 
 #[test]
-fn app_run_triggers_memory_consolidation_after_threshold() {
-    let dir = temp_dir("memory-threshold");
+fn app_run_compacts_session_without_writing_memory_files() {
+    let dir = temp_dir("session-compact");
     let mut app = NanobotApp::new(
         Config::default(),
         Box::new(StaticProvider::new("offline/test", "assistant")),
@@ -267,23 +267,28 @@ fn app_run_triggers_memory_consolidation_after_threshold() {
     )
     .expect("app should build");
 
-    for _ in 0..2 {
+    for turn in 0..101 {
         let _ = app
-            .handle_cli_message("cli:local", "remember this")
+            .handle_cli_message("cli:local", &format!("remember this {turn}"))
             .expect("message should be handled");
     }
 
+    let session = app
+        .session_manager
+        .load("cli:local")
+        .expect("session should load")
+        .expect("session should exist");
     assert!(
-        dir.join("memories")
-            .join("cli_local")
-            .join("MEMORY.md")
-            .exists()
+        session.messages.len() < 202,
+        "session should be compacted instead of keeping every original message"
     );
+    assert!(session.messages.iter().any(|message| {
+        message.role == "system"
+            && message.metadata.get("kind").map(String::as_str) == Some("compact_summary")
+    }));
     assert!(
-        dir.join("memories")
-            .join("cli_local")
-            .join("HISTORY.md")
-            .exists()
+        !dir.join("memories").join("cli_local").exists(),
+        "legacy memory files should not be created"
     );
 }
 

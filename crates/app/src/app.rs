@@ -106,7 +106,6 @@ impl NanobotApp {
                 .publish_outbound(outbound)
                 .map_err(|error| AgentError::Tool(error.to_string()))?;
         }
-        let _ = self.session_manager.maybe_consolidate(&mut session, 4)?;
         self.session_manager.save(&session)?;
         Ok(response)
     }
@@ -148,7 +147,6 @@ impl NanobotApp {
                 .publish_outbound(outbound)
                 .map_err(|error| AgentError::Tool(error.to_string()))?;
         }
-        let _ = self.session_manager.maybe_consolidate(&mut session, 4)?;
         self.session_manager.save(&session)?;
         Ok(response)
     }

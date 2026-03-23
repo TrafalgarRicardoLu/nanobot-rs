@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use log::info;
-use nanobot_provider::{ChatMessage, ChatRequest, LlmProvider, LlmResponse, ToolCallMessage};
+use nanobot_provider::{
+    ChatMessage, ChatRequest, LlmProvider, LlmResponse, ProviderError, ToolCallMessage,
+};
 use nanobot_session::{Session, StoredMessage, StoredToolCall};
 
 use crate::{
@@ -14,6 +16,7 @@ impl AgentLoop {
         Self {
             model: model.into(),
             max_history: 200,
+            compact_keep_recent: 40,
             tools: nanobot_tools::ToolRegistry::with_builtin_defaults(),
             run_config: AgentRunConfig::default(),
             cancel_requested: false,
@@ -214,6 +217,7 @@ impl AgentLoop {
                 if self.run_config.emit_progress {
                     events.push(AgentEvent::StepStarted { step: steps });
                 }
+                self.compact_session_if_needed(provider, session)?;
                 let request = ChatRequest {
                     messages: {
                         let mut messages = skill_activations
@@ -459,6 +463,54 @@ impl AgentLoop {
     fn should_drop_message(&self, content: &str) -> bool {
         self.run_config.drop_empty_messages && content.trim().is_empty()
     }
+
+    fn compact_session_if_needed(
+        &self,
+        provider: &dyn LlmProvider,
+        session: &mut Session,
+    ) -> Result<(), AgentError> {
+        if session.messages.len() <= self.max_history {
+            return Ok(());
+        }
+
+        let split_index = session
+            .messages
+            .len()
+            .saturating_sub(self.compact_keep_recent.max(1));
+        if split_index == 0 {
+            return Ok(());
+        }
+
+        let request = ChatRequest {
+            messages: compact_request_messages(session.messages[..split_index].to_vec()),
+            tools: Vec::new(),
+            model: Some(self.model.clone()),
+        };
+        let response = provider.chat(request)?;
+        let summary = response
+            .content
+            .filter(|content| !content.trim().is_empty())
+            .ok_or(ProviderError::EmptyResponse)?;
+
+        let timestamp = StoredMessage::new("system", "").timestamp;
+        let mut compacted = Vec::with_capacity(session.messages.len() - split_index + 1);
+        compacted.push(StoredMessage {
+            role: "system".to_string(),
+            content: Some(summary),
+            timestamp: timestamp.clone(),
+            name: Some("compact".to_string()),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            metadata: std::collections::HashMap::from([(
+                "kind".to_string(),
+                "compact_summary".to_string(),
+            )]),
+        });
+        compacted.extend_from_slice(&session.messages[split_index..]);
+        session.messages = compacted;
+        session.updated_at = timestamp;
+        Ok(())
+    }
 }
 
 fn stored_message_to_chat_message(item: StoredMessage) -> ChatMessage {
@@ -476,4 +528,28 @@ fn stored_message_to_chat_message(item: StoredMessage) -> ChatMessage {
             })
             .collect(),
     }
+}
+
+fn compact_request_messages(messages: Vec<StoredMessage>) -> Vec<ChatMessage> {
+    let mut request_messages = Vec::with_capacity(messages.len() + 2);
+    request_messages.push(ChatMessage {
+        role: "system".to_string(),
+        content: Some(
+            "You compact the conversation history into a concise continuation summary. Preserve user goals, constraints, important decisions, tool outcomes, and unresolved work."
+                .to_string(),
+        ),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    });
+    request_messages.extend(messages.into_iter().map(stored_message_to_chat_message));
+    request_messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: Some(
+            "Please compact the conversation history into a short summary for the next model call."
+                .to_string(),
+        ),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    });
+    request_messages
 }

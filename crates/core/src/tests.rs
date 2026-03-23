@@ -42,6 +42,43 @@ impl LlmProvider for RecordingProvider {
     }
 }
 
+#[derive(Clone, Default)]
+struct CompactingProvider {
+    requests: Arc<Mutex<Vec<ChatRequest>>>,
+}
+
+impl LlmProvider for CompactingProvider {
+    fn chat(&self, request: ChatRequest) -> Result<LlmResponse, ProviderError> {
+        self.requests.lock().expect("lock").push(request.clone());
+        let is_compact_request = request.tools.is_empty()
+            && request.messages.iter().any(|message| {
+                message.role == "system"
+                    && message
+                        .content
+                        .clone()
+                        .unwrap_or_default()
+                        .contains("compact the conversation history")
+            });
+        if is_compact_request {
+            return Ok(LlmResponse {
+                content: Some("summary of earlier context".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: "stop".to_string(),
+            });
+        }
+
+        Ok(LlmResponse {
+            content: Some("assistant after compact".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: "stop".to_string(),
+        })
+    }
+
+    fn default_model(&self) -> &str {
+        "offline/compact"
+    }
+}
+
 #[test]
 fn default_loop_registers_builtin_tools_into_provider_request() {
     let provider = RecordingProvider::default();
@@ -275,6 +312,57 @@ fn run_once_remains_compatible_with_runtime_v2() {
         .expect("run_once should remain compatible");
 
     assert_eq!(response.as_deref(), Some("assistant: compat path"));
+}
+
+#[test]
+fn runtime_v2_compacts_old_messages_before_main_provider_request() {
+    let provider = CompactingProvider::default();
+    let mut session = Session::new("cli:compact");
+    for turn in 0..5 {
+        session.add_message("user", format!("user message {turn}"));
+        session.add_message("assistant", format!("assistant message {turn}"));
+    }
+    let mut loop_ = AgentLoop::new("offline/compact");
+    loop_.max_history = 6;
+    loop_.compact_keep_recent = 4;
+
+    let report = loop_
+        .run_turn(&provider, &mut session, "latest question")
+        .expect("runtime should compact and succeed");
+
+    assert_eq!(report.status, AgentRunStatus::Completed);
+    assert_eq!(report.response.as_deref(), Some("assistant after compact"));
+    assert!(session.messages.iter().any(|message| {
+        message.role == "system"
+            && message.content.as_deref() == Some("summary of earlier context")
+            && message.metadata.get("kind").map(String::as_str) == Some("compact_summary")
+    }));
+    assert!(
+        session
+            .messages
+            .iter()
+            .all(|message| { message.content.as_deref().unwrap_or_default() != "user message 0" })
+    );
+
+    let requests = provider.requests.lock().expect("lock");
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].tools.is_empty());
+    assert!(requests[0].messages.iter().any(|message| {
+        message
+            .content
+            .clone()
+            .unwrap_or_default()
+            .contains("compact the conversation history")
+    }));
+    assert!(requests[1].messages.iter().any(|message| {
+        message.role == "system" && message.content.as_deref() == Some("summary of earlier context")
+    }));
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .all(|message| { message.content.as_deref() != Some("user message 0") })
+    );
 }
 
 #[derive(Clone, Default)]
